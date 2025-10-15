@@ -1,0 +1,29 @@
+//@version=5
+indicator("Pitt's Volume Momentum", overlay=false)
+
+// Входные параметры
+length = input.int(20, "Период")
+threshold = input.float(1.5, "Порог волатильности")
+
+// Логика
+volume_ma = ta.sma(volume, length)
+price_change = ta.roc(close, 1)
+volatility = ta.stdev(close, length) / ta.sma(close, length)
+
+// Сигналы
+volume_spike = volume > volume_ma * threshold
+momentum_shift = price_change > 0 and price_change[1] < 0
+
+// Цветовые условия
+color_code = if volume_spike and momentum_shift
+    color.new(color.green, 70)
+else if volume_spike
+    color.new(color.orange, 70)
+else
+    color.new(color.gray, 90)
+
+// Отображение
+plot(volume, style=plot.style_columns, color=color_code)
+
+// Алерт
+alertcondition(volume_spike and momentum_shift, title="Volume+Momentum", message="Вход!")
