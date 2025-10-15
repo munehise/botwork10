@@ -1,0 +1,55 @@
+//@version=5
+indicator("Pitt Volume Momentum Pro", overlay=false)
+
+// Inputs
+vol_period = input.int(20, title="Volume Period")
+spike_mult = input.float(1.5, title="Spike Multiplier")
+htf_enabled = input.bool(true, title="Use Higher Timeframe")
+htf_res = input.timeframe("15", title="Higher TF Resolution")
+display_info = input.bool(true, title="Display Info Panel")
+
+// Fetch higher TF data if enabled
+htf_vol = request.security(syminfo.tickerid, htf_res, volume)
+htf_price = request.security(syminfo.tickerid, htf_res, close)
+
+// Volume MA
+vol_ma = ta.sma(htf_enabled ? htf_vol : volume, vol_period)
+
+// Select source
+src_vol = htf_enabled ? htf_vol : volume
+src_price = htf_enabled ? htf_price : close
+
+// Signals
+vol_surge = src_vol > vol_ma * spike_mult
+price_delta = ta.change(src_price)
+mom_reversal = price_delta > 0 and price_delta[1] < 0
+
+// Strength calculation
+ratio = src_vol / vol_ma
+sig_strength = ratio >= 3 ? 3 : ratio >= 2 ? 2 : ratio >= 1.5 ? 1 : 0
+
+// Color logic
+bar_color = color.gray
+if vol_surge and mom_reversal
+    bar_color := sig_strength == 3 ? color.new(color.lime, 0) : sig_strength == 2 ? color.new(color.lime, 30) : sig_strength == 1 ? color.new(color.lime, 60) : color.new(color.lime, 80)
+else if vol_surge
+    bar_color := sig_strength == 3 ? color.new(color.orange, 0) : sig_strength == 2 ? color.new(color.orange, 30) : sig_strength == 1 ? color.new(color.orange, 60) : color.new(color.orange, 80)
+
+// Plot volume bars
+plot(volume, title="Volume", color=bar_color, style=plot.style_columns)
+
+// Info panel
+if display_info and (vol_surge or mom_reversal)
+    var info_panel = table.new(position.top_right, 2, 3, bgcolor=color.white, border_width=1)
+    table.cell(info_panel, 0, 0, "Vol Ratio", text_color=color.black, bgcolor=color.new(color.blue, 70))
+    table.cell(info_panel, 1, 0, str.tostring(math.round(ratio, 2)) + "x", text_color=color.black)
+    table.cell(info_panel, 0, 1, "Level", text_color=color.black, bgcolor=color.new(color.blue, 70))
+    table.cell(info_panel, 1, 1, str.tostring(sig_strength) + "/3", text_color=color.black)
+    table.cell(info_panel, 0, 2, "Type", text_color=color.black, bgcolor=color.new(color.blue, 70))
+    sig_type = vol_surge and mom_reversal ? "HIGH" : vol_surge ? "MEDIUM" : "LOW"
+    table.cell(info_panel, 1, 2, sig_type, text_color=color.black)
+
+// Dynamic alert
+high_conf_signal = vol_surge and mom_reversal and sig_strength >= 2
+if high_conf_signal
+    alert("High Confidence Volume Surge Detected! Ratio: " + str.tostring(math.round(ratio, 2)) + "x", alert.freq_once_per_bar)
