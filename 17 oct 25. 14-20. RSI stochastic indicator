@@ -1,0 +1,158 @@
+//@version=6
+indicator(title="Stochastic & RSI Merged", shorttitle="Stoch & RSI", format=format.price, precision=2, timeframe="", timeframe_gaps=true)
+
+// --- Stochastic Inputs ---
+periodK = input.int(14, title="%K Length", minval=1, group="Stochastic Settings")
+smoothK = input.int(1, title="%K Smoothing", minval=1, group="Stochastic Settings")
+periodD = input.int(3, title="%D Smoothing", minval=1, group="Stochastic Settings")
+
+// --- RSI Inputs ---
+rsiLengthInput = input.int(14, minval=1, title="RSI Length", group="RSI Settings")
+rsiSourceInput = input.source(close, "Source", group="RSI Settings")
+calculateDivergence = input.bool(false, title="Calculate Divergence", group="RSI Settings", display = display.data_window, tooltip = "Calculating divergences is needed in order for divergence alerts to fire.")
+
+// --- Smoothing MA Inputs for RSI ---
+GRP = "RSI Smoothing"
+TT_BB = "Only applies when 'SMA + Bollinger Bands' is selected. Determines the distance between the SMA and the bands."
+maTypeInput = input.string("SMA", "Type", options = ["None", "SMA", "SMA + Bollinger Bands", "EMA", "SMMA (RMA)", "WMA", "VWMA"], group = GRP, display = display.data_window)
+var isBB = maTypeInput == "SMA + Bollinger Bands"
+maLengthInput = input.int(14, "Length", group = GRP, display = display.data_window, active = maTypeInput != "None")
+bbMultInput = input.float(2.0, "BB StdDev", minval = 0.001, maxval = 50, step = 0.5, tooltip = TT_BB, group = GRP, display = display.data_window, active = isBB)
+var enableMA = maTypeInput != "None"
+
+// --- Stochastic Calculation ---
+k = ta.sma(ta.stoch(close, high, low, periodK), smoothK)
+d = ta.sma(k, periodD)
+
+// --- RSI Calculation ---
+change = ta.change(rsiSourceInput)
+up = ta.rma(math.max(change, 0), rsiLengthInput)
+down = ta.rma(-math.min(change, 0), rsiLengthInput)
+rsi = down == 0 ? 100 : up == 0 ? 0 : 100 - (100 / (1 + up / down))
+
+// --- RSI Shift for Upper Level ( +100 ) ---
+rsi_shift = 100
+rsi_shifted = rsi + rsi_shift
+
+// --- Smoothing MA Calculation for RSI ---
+ma(source, length, MAtype) =>
+    switch MAtype
+        "SMA"                   => ta.sma(source, length)
+        "SMA + Bollinger Bands" => ta.sma(source, length)
+        "EMA"                   => ta.ema(source, length)
+        "SMMA (RMA)"            => ta.rma(source, length)
+        "WMA"                   => ta.wma(source, length)
+        "VWMA"                  => ta.vwma(source, length)
+
+// --- Smoothing MA for RSI ---
+smoothingMA = enableMA ? ma(rsi, maLengthInput, maTypeInput) : na
+smoothingStDev = isBB ? ta.stdev(rsi, maLengthInput) * bbMultInput : na
+smoothingMA_shifted = enableMA ? smoothingMA + rsi_shift : na
+
+// --- Divergence Settings ---
+lookbackRight = 5
+lookbackLeft = 5
+rangeUpper = 60
+rangeLower = 5
+bearColor = color.red
+bullColor = color.green
+textColor = color.white
+noneColor = color.new(color.white, 100)
+
+_inRange(bool cond) =>
+    bars = ta.barssince(cond)
+    rangeLower <= bars and bars <= rangeUpper
+
+plFound = false
+phFound = false
+
+bullCond = false
+bearCond = false
+
+rsiLBR = rsi[lookbackRight]
+
+if calculateDivergence
+    // Regular Bullish
+    plFound := not na(ta.pivotlow(rsi, lookbackLeft, lookbackRight))    
+    rsiHL = rsiLBR > ta.valuewhen(plFound, rsiLBR, 1) and _inRange(plFound[1])
+    lowLBR = low[lookbackRight]
+    priceLL = lowLBR < ta.valuewhen(plFound, lowLBR, 1)
+    bullCond := priceLL and rsiHL and plFound
+
+    // Regular Bearish
+    phFound := not na(ta.pivothigh(rsi, lookbackLeft, lookbackRight))
+    rsiLH = rsiLBR < ta.valuewhen(phFound, rsiLBR, 1) and _inRange(phFound[1])
+    highLBR = high[lookbackRight]
+    priceHH = highLBR > ta.valuewhen(phFound, highLBR, 1)
+    bearCond := priceHH and rsiLH and phFound
+
+// --- Stochastic Plots (Lower Level: 0-100) ---
+plot(k, title="%K", color=#2962FF)
+plot(d, title="%D", color=#FF6D00)
+h0_stoch = hline(80, "Stoch Upper Band", color=#787B86)
+hline(50, "Stoch Middle Band", color=color.new(#787B86, 50))
+h1_stoch = hline(20, "Stoch Lower Band", color=#787B86)
+fill(h0_stoch, h1_stoch, color=color.rgb(33, 150, 243, 90), title="Stoch Background")
+
+// --- RSI Plots (Upper Level: 100-200) ---
+rsiPlot = plot(rsi_shifted, "RSI", color=#7E57C2)
+rsiUpperBand = hline(170, "RSI Upper Band", color=#787B86)
+midline_rsi = hline(150, "RSI Middle Band", color=color.new(#787B86, 50))
+rsiLowerBand = hline(130, "RSI Lower Band", color=#787B86)
+fill(rsiUpperBand, rsiLowerBand, color=color.rgb(126, 87, 194, 90), title="RSI Background Fill")
+midLinePlot = plot(150, color = na, editable = false, display = display.none)
+fill(rsiPlot, midLinePlot, 200, 170, top_color = color.new(color.green, 0), bottom_color = color.new(color.green, 100), title = "Overbought Gradient Fill")
+fill(rsiPlot, midLinePlot, 130, 100, top_color = color.new(color.red, 100), bottom_color = color.new(color.red, 0), title = "Oversold Gradient Fill")
+
+// --- Smoothing MA Plots for RSI (Shifted) ---
+plot(smoothingMA_shifted, "RSI-based MA", color=color.yellow, display = enableMA ? display.all : display.none, editable = enableMA)
+bbUpperBand = plot(smoothingMA_shifted + smoothingStDev, title = "Upper Bollinger Band", color=color.green, display = isBB ? display.all : display.none, editable = isBB)
+bbLowerBand = plot(smoothingMA_shifted - smoothingStDev, title = "Lower Bollinger Band", color=color.green, display = isBB ? display.all : display.none, editable = isBB)
+fill(bbUpperBand, bbLowerBand, color= isBB ? color.new(color.green, 90) : na, title="Bollinger Bands Background Fill", display = isBB ? display.all : display.none, editable = isBB)
+
+// --- Divergence Plots (Shifted for RSI) ---
+plot(
+     plFound   ? rsiLBR + rsi_shift : na,
+     offset    = -lookbackRight,
+     title     = "Regular Bullish",
+     linewidth = 2,
+     color     = (bullCond ? bullColor : noneColor),
+     display   = display.pane,
+     editable  = calculateDivergence)
+
+plotshape(
+     bullCond  ? rsiLBR + rsi_shift : na,
+     offset    = -lookbackRight,
+     title     = "Regular Bullish Label",
+     text      = " Bull ",
+     style     = shape.labelup,
+     location  = location.absolute,
+     color     = bullColor,
+     textcolor = textColor,
+     display   = display.pane,
+     editable  = calculateDivergence)
+
+plot(
+     phFound   ? rsiLBR + rsi_shift : na,
+     offset    = -lookbackRight,
+     title     = "Regular Bearish",
+     linewidth = 2,
+     color     = (bearCond ? bearColor : noneColor),
+     display   = display.pane,
+     editable  = calculateDivergence)
+
+plotshape(
+     bearCond  ? rsiLBR + rsi_shift : na,
+     offset    = -lookbackRight,
+     title     = "Regular Bearish Label",
+     text      = " Bear ",
+     style     = shape.labeldown,
+     location  = location.absolute,
+     color     = bearColor,
+     textcolor = textColor,
+     display   = display.pane,
+     editable  = calculateDivergence)
+
+// --- Alerts ---
+alertcondition(bullCond, title='Regular Bullish Divergence', message="Found a new Regular Bullish Divergence, `Pivot Lookback Right` number of bars to the left of the current bar.")
+alertcondition(bearCond, title='Regular Bearish Divergence', message='Found a new Regular Bearish Divergence, `Pivot Lookback Right` number of bars to the left of the current bar.')
