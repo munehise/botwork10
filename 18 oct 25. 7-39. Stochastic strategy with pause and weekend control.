@@ -1,0 +1,1033 @@
+//@version=5
+strategy("Stochastic Slow Strategy with Quad MA Filter & Pyramiding", overlay=true, initial_capital=10000, max_bars_back=500, max_labels_count=500)
+
+// --- Входные параметры для Stochastic ---
+length = input.int(14, "Stochastic Length", minval=1)
+OverBought = input.int(80, "Overbought", minval=0, maxval=100)
+OverSold = input.int(20, "Oversold", minval=0, maxval=100)
+smoothK = input.int(3, "Smooth %K", minval=1, tooltip="Smoothing for %K")
+smoothD = input.int(3, "Smooth %D", minval=1, tooltip="Smoothing for %D")
+
+// --- Входные параметры для Secondary Stochastic ---
+use_secondary_stoch = input.bool(false, "Use Secondary Stochastic for Replacement Entry", group="Secondary Stochastic Settings")
+secondary_length = input.int(21, "Secondary Stochastic Length", minval=1, group="Secondary Stochastic Settings")
+secondary_OverBought = input.int(80, "Secondary Overbought", minval=0, maxval=100, group="Secondary Stochastic Settings")
+secondary_OverSold = input.int(20, "Secondary Oversold", minval=0, maxval=100, group="Secondary Stochastic Settings")
+secondary_smoothK = input.int(5, "Secondary Smooth %K", minval=1, group="Secondary Stochastic Settings", tooltip="Smoothing for Secondary %K")
+secondary_smoothD = input.int(5, "Secondary Smooth %D", minval=1, group="Secondary Stochastic Settings", tooltip="Smoothing for Secondary %D")
+
+// --- Входные параметры для Fast MA ---
+fast_ma_length = input.int(20, "Fast MA Length", minval=1)
+fast_ma_source = input.source(close, "Fast MA Source", tooltip="Источник для Fast MA (close, open, high, low и т.д.)")
+fast_ma_type = input.string("SMA", "Fast MA Type", options=["SMA", "EMA", "WMA", "RMA"], tooltip="Тип Fast MA: SMA - простая, EMA - экспоненциальная, WMA - взвешенная, RMA - сглаженная")
+use_fast_price_filter = input.bool(false, "Use Fast MA Price Filter", tooltip="Если цена выше Fast MA - только лонг, ниже - только шорт")
+
+// --- Входные параметры для Slow MA ---
+slow_ma_length = input.int(100, "Slow MA Length", minval=1)
+slow_ma_source = input.source(close, "Slow MA Source", tooltip="Источник для Slow MA (close, open, high, low и т.д.)")
+slow_ma_type = input.string("SMA", "Slow MA Type", options=["SMA", "EMA", "WMA", "RMA"], tooltip="Тип Slow MA: SMA - простая, EMA - экспоненциальная, WMA - взвешенная, RMA - сглаженная")
+use_slow_price_filter = input.bool(false, "Use Slow MA Price Filter", tooltip="Если цена выше Slow MA - только лонг, ниже - только шорт")
+
+// --- Входные параметры для Extra MA 1 ---
+extra_ma1_length = input.int(50, "Extra MA 1 Length", minval=1, group="Extra MA 1 Settings")
+extra_ma1_source = input.source(close, "Extra MA 1 Source", group="Extra MA 1 Settings")
+extra_ma1_type = input.string("SMA", "Extra MA 1 Type", options=["SMA", "EMA", "WMA", "RMA"], group="Extra MA 1 Settings")
+use_extra_ma1_filter = input.bool(false, "Use Extra MA 1 Price Filter", group="Extra MA 1 Settings", tooltip="Если цена выше Extra MA 1 - только лонг, ниже - только шорт")
+
+// --- Входные параметры для Extra MA 2 ---
+extra_ma2_length = input.int(200, "Extra MA 2 Length", minval=1, group="Extra MA 2 Settings")
+extra_ma2_source = input.source(close, "Extra MA 2 Source", group="Extra MA 2 Settings")
+extra_ma2_type = input.string("SMA", "Extra MA 2 Type", options=["SMA", "EMA", "WMA", "RMA"], group="Extra MA 2 Settings")
+use_extra_ma2_filter = input.bool(false, "Use Extra MA 2 Price Filter", group="Extra MA 2 Settings", tooltip="Если цена выше Extra MA 2 - только лонг, ниже - только шорт")
+
+// --- Входные параметры для выхода ---
+exit_bars = input.int(30, "Exit After Bars", minval=1, tooltip="Количество баров для выхода из позиции")
+use_ma_exit = input.bool(false, "Use Slow MA Exit", tooltip="Включить выход при касании Slow MA (опционально)")
+use_stoch_exit = input.bool(false, "Use Stochastic Exit", tooltip="Включить выход по обратному пересечению Stochastic (опционально)")
+use_ma_pair_exit = input.bool(false, "Use MA Pair Crossover Exit", tooltip="Включить выход по обратному пересечению основной пары MA линий (опционально)")
+use_bar_color_exit = input.bool(false, "Use Bar Color Exit", tooltip="Включить выход по смене цвета бара (игнорируя серые бары)")
+
+// --- Входные параметры для RSI фильтра ---
+use_rsi_filter = input.bool(false, "Use RSI Filter", tooltip="Включить опциональный RSI фильтр")
+rsi_length = input.int(14, "RSI Length", minval=1, group="RSI Filter Settings")
+rsi_source = input.source(close, "RSI Source", group="RSI Filter Settings")
+rsi_long_low = input.int(30, "RSI Long Low", minval=0, maxval=100, group="RSI Filter Settings")
+rsi_long_high = input.int(50, "RSI Long High", minval=0, maxval=100, group="RSI Filter Settings")
+rsi_short_low = input.int(50, "RSI Short Low", minval=0, maxval=100, group="RSI Filter Settings")
+rsi_short_high = input.int(70, "RSI Short High", minval=0, maxval=100, group="RSI Filter Settings")
+use_rsi_ma_filter = input.bool(false, "Use RSI MA Filter", group="RSI Filter Settings", tooltip="Если RSI MA > Long Threshold только лонг, < Short Threshold только шорт")
+rsi_ma_length = input.int(45, "RSI MA Length", minval=1, group="RSI Filter Settings")
+rsi_ma_type = input.string("SMA", "RSI MA Type", options=["SMA", "EMA", "WMA", "RMA"], group="RSI Filter Settings")
+rsi_ma_long_threshold = input.float(50.0, "RSI MA Long Threshold", minval=0, maxval=100, group="RSI Filter Settings")
+rsi_ma_short_threshold = input.float(50.0, "RSI MA Short Threshold", minval=0, maxval=100, group="RSI Filter Settings")
+
+// --- Входные параметры для MACD фильтра ---
+use_macd_filter = input.bool(false, "Use MACD Filter", tooltip="Включить опциональный MACD фильтр для входа")
+use_macd_exit = input.bool(false, "Use MACD Exit", tooltip="Включить выход по MACD (опционально)", group="MACD Filter Settings")
+useMacdJ1  = input.bool(true,  "Use MACD J1 Filter", group="MACD Filter Settings")
+useMacdJ2  = input.bool(true,  "Use MACD J2 Filter", group="MACD Filter Settings")
+useMacdS11 = input.bool(false, "Use MACD S1_1 Filter", group="MACD Filter Settings")
+useMacdS12 = input.bool(false, "Use MACD S1_2 Filter", group="MACD Filter Settings")
+macd_fast_j1   = input.int(12,  "MACD Fast J1", group="MACD Filter Settings")
+macd_slow_j1   = input.int(26,  "MACD Slow J1", group="MACD Filter Settings")
+macd_fast_j2   = input.int(21,  "MACD Fast J2", group="MACD Filter Settings")
+macd_slow_j2   = input.int(55,  "MACD Slow J2", group="MACD Filter Settings")
+macd_fast_s1_1 = input.int(24,  "MACD Fast S1_1", group="MACD Filter Settings")
+macd_slow_s1_1 = input.int(52,  "MACD Slow S1_1", group="MACD Filter Settings")
+macd_fast_s1_2 = input.int(42,  "MACD Fast S1_2", group="MACD Filter Settings")
+macd_slow_s1_2 = input.int(110, "MACD Slow S1_2", group="MACD Filter Settings")
+
+// --- Настройки размеров позиций (% от equity) ---
+positionGroup = "=== Настройки размеров позиций (в % от equity) ==="
+baseLongQty     = input.float(10.0, "Base Long % Qty", minval=0.1, step=0.1, group=positionGroup)
+baseShortQty    = input.float(10.0, "Base Short % Qty", minval=0.1, step=0.1, group=positionGroup)
+longP1Qty = input.float(10.0, "Long P1 % Qty", minval=0.1, step=0.1, group=positionGroup)
+longP2Qty = input.float(10.0, "Long P2 % Qty", minval=0.1, step=0.1, group=positionGroup)
+longP3Qty = input.float(10.0, "Long P3 % Qty", minval=0.1, step=0.1, group=positionGroup)
+longP4Qty = input.float(10.0, "Long P4 % Qty", minval=0.1, step=0.1, group=positionGroup)
+longP5Qty = input.float(10.0, "Long P5 % Qty", minval=0.1, step=0.1, group=positionGroup)
+longP6Qty = input.float(10.0, "Long P6 % Qty", minval=0.1, step=0.1, group=positionGroup)
+longP7Qty = input.float(10.0, "Long P7 % Qty", minval=0.1, step=0.1, group=positionGroup)
+longP8Qty = input.float(10.0, "Long P8 % Qty", minval=0.1, step=0.1, group=positionGroup)
+longP9Qty = input.float(10.0, "Long P9 % Qty", minval=0.1, step=0.1, group=positionGroup)
+longP10Qty = input.float(10.0, "Long P10 % Qty", minval=0.1, step=0.1, group=positionGroup)
+shortP1Qty = input.float(10.0, "Short P1 % Qty", minval=0.1, step=0.1, group=positionGroup)
+shortP2Qty = input.float(10.0, "Short P2 % Qty", minval=0.1, step=0.1, group=positionGroup)
+shortP3Qty = input.float(10.0, "Short P3 % Qty", minval=0.1, step=0.1, group=positionGroup)
+shortP4Qty = input.float(10.0, "Short P4 % Qty", minval=0.1, step=0.1, group=positionGroup)
+shortP5Qty = input.float(10.0, "Short P5 % Qty", minval=0.1, step=0.1, group=positionGroup)
+shortP6Qty = input.float(10.0, "Short P6 % Qty", minval=0.1, step=0.1, group=positionGroup)
+shortP7Qty = input.float(10.0, "Short P7 % Qty", minval=0.1, step=0.1, group=positionGroup)
+shortP8Qty = input.float(10.0, "Short P8 % Qty", minval=0.1, step=0.1, group=positionGroup)
+shortP9Qty = input.float(10.0, "Short P9 % Qty", minval=0.1, step=0.1, group=positionGroup)
+shortP10Qty = input.float(10.0, "Short P10 % Qty", minval=0.1, step=0.1, group=positionGroup)
+
+// --- Настройки стопа и безубытка ---
+stopGroup = "=== Настройки стопа и безубытка ==="
+useBarStop   = input.bool(true, "Включить стоп по экстремуму бара", group=stopGroup)
+stopOffset   = input.float(0.0, "Оффсет стопа (в пунктах)", step=0.1, group=stopGroup)
+useBreakeven = input.bool(true, "Включить перенос стопа в безубыток", group=stopGroup)
+offset_percent = input.float(0.3, "Сдвиг BE в % от цены (для покрытия комиссии)", minval=0, step=0.01, group=stopGroup) / 100
+useTrailingStop = input.bool(true, "Use Trailing Stop on Avg BE", group=stopGroup)
+trailing_offset_percent = input.float(0.1, "Trailing Offset % from Avg BE", minval=0, step=0.01, group=stopGroup) / 100
+stopPyramidingAfterPartial = input.bool(true, "Остановить пирамидинг после частичного закрытия на стопе", group=stopGroup)
+
+// --- Trading Schedule and Pause Settings ---
+scheduleGroup = "=== Trading Schedule and Pause ==="
+enableTimeFilter = input.bool(true, "Skip Trading in Weekend Hours", group=scheduleGroup)
+friDisableHour   = input.int(16, "Friday Disable Hour", minval=0, maxval=23, group=scheduleGroup)
+sunEnableHour    = input.int(16, "Sunday Enable Hour", minval=0, maxval=23, group=scheduleGroup)
+minBarsPause = input.int(3, "Pause Bars After Close", minval=0, group=scheduleGroup)
+
+// --- Индикатор Stochastic ---
+k = ta.sma(ta.stoch(close, high, low, length), smoothK)
+d = ta.sma(k, smoothD)
+co = ta.crossover(k, d)
+cu = ta.crossunder(k, d)
+
+// --- Secondary Stochastic ---
+secondary_k = ta.sma(ta.stoch(close, high, low, secondary_length), secondary_smoothK)
+secondary_d = ta.sma(secondary_k, secondary_smoothD)
+secondary_co = ta.crossover(secondary_k, secondary_d)
+secondary_cu = ta.crossunder(secondary_k, secondary_d)
+
+// --- Расчет RSI ---
+change = ta.change(rsi_source)
+up = ta.rma(math.max(change, 0), rsi_length)
+down = ta.rma(-math.min(change, 0), rsi_length)
+rsi = down == 0 ? 100 : up == 0 ? 0 : 100 - (100 / (1 + up / down))
+
+// --- Расчет RSI MA ---
+rsi_ma = switch rsi_ma_type
+    "SMA" => ta.sma(rsi, rsi_ma_length)
+    "EMA" => ta.ema(rsi, rsi_ma_length)
+    "WMA" => ta.wma(rsi, rsi_ma_length)
+    "RMA" => ta.rma(rsi, rsi_ma_length)
+    => ta.sma(rsi, rsi_ma_length)
+
+// --- MACD ZERO LINE FILTERS (кэшированные EMA для скорости) ---
+alpha(len) => 2 / (len + 1)
+
+// Вычисляем EMA как series (без var для избежания NA-ошибок)
+ema_j1_fast  = ta.ema(close, macd_fast_j1)
+ema_j1_slow  = ta.ema(close, macd_slow_j1)
+ema_j2_fast  = ta.ema(close, macd_fast_j2)
+ema_j2_slow  = ta.ema(close, macd_slow_j2)
+ema_s11_fast = ta.ema(close, macd_fast_s1_1)
+ema_s11_slow = ta.ema(close, macd_slow_s1_1)
+ema_s12_fast = ta.ema(close, macd_fast_s1_2)
+ema_s12_slow = ta.ema(close, macd_slow_s1_2)
+
+macd_j1   = (0 + (1 - alpha(macd_slow_j1)) * nz(ema_j1_slow[1]) - (1 - alpha(macd_fast_j1)) * nz(ema_j1_fast[1])) / (alpha(macd_fast_j1) - alpha(macd_slow_j1))
+macd_j2   = (0 + (1 - alpha(macd_slow_j2)) * nz(ema_j2_slow[1]) - (1 - alpha(macd_fast_j2)) * nz(ema_j2_fast[1])) / (alpha(macd_fast_j2) - alpha(macd_slow_j2))
+macd_s1_1 = (0 + (1 - alpha(macd_slow_s1_1)) * nz(ema_s11_slow[1]) - (1 - alpha(macd_fast_s1_1)) * nz(ema_s11_fast[1])) / (alpha(macd_fast_s1_1) - alpha(macd_slow_s1_1))
+macd_s1_2 = (0 + (1 - alpha(macd_slow_s1_2)) * nz(ema_s12_slow[1]) - (1 - alpha(macd_fast_s1_2)) * nz(ema_s12_fast[1])) / (alpha(macd_fast_s1_2) - alpha(macd_slow_s1_2))
+
+macdFilterPassLong  = (not useMacdJ1 or close > macd_j1) and (not useMacdJ2 or close > macd_j2) and (not useMacdS11 or close > macd_s1_1) and (not useMacdS12 or close > macd_s1_2)
+macdFilterPassShort = (not useMacdJ1 or close < macd_j1) and (not useMacdJ2 or close < macd_j2) and (not useMacdS11 or close < macd_s1_1) and (not useMacdS12 or close < macd_s1_2)
+
+// --- Расчет Fast MA ---
+fast_ma = switch fast_ma_type
+    "SMA" => ta.sma(fast_ma_source, fast_ma_length)
+    "EMA" => ta.ema(fast_ma_source, fast_ma_length)
+    "WMA" => ta.wma(fast_ma_source, fast_ma_length)
+    "RMA" => ta.rma(fast_ma_source, fast_ma_length)
+    => ta.sma(fast_ma_source, fast_ma_length)
+
+// --- Расчет Slow MA ---
+slow_ma = switch slow_ma_type
+    "SMA" => ta.sma(slow_ma_source, slow_ma_length)
+    "EMA" => ta.ema(slow_ma_source, slow_ma_length)
+    "WMA" => ta.wma(slow_ma_source, slow_ma_length)
+    "RMA" => ta.rma(slow_ma_source, slow_ma_length)
+    => ta.sma(slow_ma_source, slow_ma_length)
+
+// --- Расчет Extra MA 1 ---
+extra_ma1 = switch extra_ma1_type
+    "SMA" => ta.sma(extra_ma1_source, extra_ma1_length)
+    "EMA" => ta.ema(extra_ma1_source, extra_ma1_length)
+    "WMA" => ta.wma(extra_ma1_source, extra_ma1_length)
+    "RMA" => ta.rma(extra_ma1_source, extra_ma1_length)
+    => ta.sma(extra_ma1_source, extra_ma1_length)
+
+// --- Расчет Extra MA 2 ---
+extra_ma2 = switch extra_ma2_type
+    "SMA" => ta.sma(extra_ma2_source, extra_ma2_length)
+    "EMA" => ta.ema(extra_ma2_source, extra_ma2_length)
+    "WMA" => ta.wma(extra_ma2_source, extra_ma2_length)
+    "RMA" => ta.rma(extra_ma2_source, extra_ma2_length)
+    => ta.sma(extra_ma2_source, extra_ma2_length)
+
+// --- Условия для фильтра Dual MA ---
+long_filter = fast_ma > slow_ma
+short_filter = fast_ma < slow_ma
+
+// --- Условия для Price vs MA фильтров ---
+fast_price_long = close > fast_ma
+fast_price_short = close < fast_ma
+slow_price_long = close > slow_ma
+slow_price_short = close < slow_ma
+extra_ma1_price_long = close > extra_ma1
+extra_ma1_price_short = close < extra_ma1
+extra_ma2_price_long = close > extra_ma2
+extra_ma2_price_short = close < extra_ma2
+
+// --- RSI фильтр ---
+rsi_long_filter = use_rsi_filter ? (rsi > rsi_long_low and rsi < rsi_long_high) : true
+rsi_short_filter = use_rsi_filter ? (rsi > rsi_short_low and rsi < rsi_short_high) : true
+
+// --- RSI MA фильтр ---
+rsi_ma_long_filter = use_rsi_ma_filter ? rsi_ma > rsi_ma_long_threshold : true
+rsi_ma_short_filter = use_rsi_ma_filter ? rsi_ma < rsi_ma_short_threshold : true
+
+// --- Условия для фильтров (без стохастик сигналов) ---
+long_filters = long_filter and rsi_long_filter and (not use_fast_price_filter or fast_price_long) and (not use_slow_price_filter or slow_price_long) and (not use_extra_ma1_filter or extra_ma1_price_long) and (not use_extra_ma2_filter or extra_ma2_price_long) and rsi_ma_long_filter and (not use_macd_filter or macdFilterPassLong)
+short_filters = short_filter and rsi_short_filter and (not use_fast_price_filter or fast_price_short) and (not use_slow_price_filter or slow_price_short) and (not use_extra_ma1_filter or extra_ma1_price_short) and (not use_extra_ma2_filter or extra_ma2_price_short) and rsi_ma_short_filter and (not use_macd_filter or macdFilterPassShort)
+
+// --- Time Filter ---
+day = dayofweek(time)
+h = hour(time)
+inDisabledTime = enableTimeFilter and (
+     (day == dayofweek.friday and h >= friDisableHour) or
+     (day == dayofweek.saturday) or
+     (day == dayofweek.sunday and h < sunEnableHour))
+
+// --- Pause After Close ---
+var int barsSinceExit = 999
+barsSinceExit := strategy.position_size == 0 ? nz(barsSinceExit[1]) + 1 : 0
+canTrade = barsSinceExit > minBarsPause
+
+// --- Just Closed Flags ---
+var bool justClosedLong = false
+var bool justClosedShort = false
+
+if barsSinceExit > minBarsPause
+    justClosedLong := false
+    justClosedShort := false
+
+// --- Primary и Secondary сигналы ---
+primary_long_signal = co and k < OverSold
+primary_short_signal = cu and k > OverBought
+secondary_long_signal = secondary_co and secondary_k < secondary_OverSold
+secondary_short_signal = secondary_cu and secondary_k > secondary_OverBought
+
+// --- Переменные для позиций и стопа ---
+var float longStopLine  = na
+var float shortStopLine = na
+var float longEntryPrice    = na
+var float shortEntryPrice   = na
+var float longBreakevenTrig = na
+var float shortBreakevenTrig= na
+var float longInitialRisk = na
+var float shortInitialRisk = na
+var float longP0Entry = na
+var float shortP0Entry = na
+var bool longP0Open = false
+var bool longP1Open = false
+var bool longP2Open = false
+var bool longP3Open = false
+var bool longP4Open = false
+var bool longP5Open = false
+var bool longP6Open = false
+var bool longP7Open = false
+var bool longP8Open = false
+var bool longP9Open = false
+var bool longP10Open = false
+var bool shortP0Open = false
+var bool shortP1Open = false
+var bool shortP2Open = false
+var bool shortP3Open = false
+var bool shortP4Open = false
+var bool shortP5Open = false
+var bool shortP6Open = false
+var bool shortP7Open = false
+var bool shortP8Open = false
+var bool shortP9Open = false
+var bool shortP10Open = false
+var float longP0Size = na
+var float longP1Size = na
+var float longP2Size = na
+var float longP3Size = na
+var float longP4Size = na
+var float longP5Size = na
+var float longP6Size = na
+var float longP7Size = na
+var float longP8Size = na
+var float longP9Size = na
+var float longP10Size = na
+var float shortP0Size = na
+var float shortP1Size = na
+var float shortP2Size = na
+var float shortP3Size = na
+var float shortP4Size = na
+var float shortP5Size = na
+var float shortP6Size = na
+var float shortP7Size = na
+var float shortP8Size = na
+var float shortP9Size = na
+var float shortP10Size = na
+var float longP0EntryPrice = na
+var float longP1EntryPrice = na
+var float longP2EntryPrice = na
+var float longP3EntryPrice = na
+var float longP4EntryPrice = na
+var float longP5EntryPrice = na
+var float longP6EntryPrice = na
+var float longP7EntryPrice = na
+var float longP8EntryPrice = na
+var float longP9EntryPrice = na
+var float longP10EntryPrice = na
+var float shortP0EntryPrice = na
+var float shortP1EntryPrice = na
+var float shortP2EntryPrice = na
+var float shortP3EntryPrice = na
+var float shortP4EntryPrice = na
+var float shortP5EntryPrice = na
+var float shortP6EntryPrice = na
+var float shortP7EntryPrice = na
+var float shortP8EntryPrice = na
+var float shortP9EntryPrice = na
+var float shortP10EntryPrice = na
+var bool long_be_active = false
+var bool short_be_active = false
+var bool partialCloseOccurred = false
+var float trailingLongStop = na
+var float trailingShortStop = na
+var bool long_filtered = false
+var bool short_filtered = false
+
+// --- Переменные для гипотетического P&L ---
+var float intendedExitPrice = na
+var float savedAvgPrice = na
+var float savedPositionSize = na
+var float hypNetProfit = 0.0
+
+// Update open flags based on current open trades
+if strategy.position_size > 0
+    longP0Open := false
+    longP1Open := false
+    longP2Open := false
+    longP3Open := false
+    longP4Open := false
+    longP5Open := false
+    longP6Open := false
+    longP7Open := false
+    longP8Open := false
+    longP9Open := false
+    longP10Open := false
+    for i = 0 to strategy.opentrades - 1
+        eid = strategy.opentrades.entry_id(i)
+        if str.contains(eid, "Long P")
+            lev_str = str.substring(eid, 6, str.length(eid))
+            lev = int(str.tonumber(lev_str))
+            switch lev
+                0 => longP0Open := true
+                1 => longP1Open := true
+                2 => longP2Open := true
+                3 => longP3Open := true
+                4 => longP4Open := true
+                5 => longP5Open := true
+                6 => longP6Open := true
+                7 => longP7Open := true
+                8 => longP8Open := true
+                9 => longP9Open := true
+                10 => longP10Open := true
+
+if strategy.position_size < 0
+    shortP0Open := false
+    shortP1Open := false
+    shortP2Open := false
+    shortP3Open := false
+    shortP4Open := false
+    shortP5Open := false
+    shortP6Open := false
+    shortP7Open := false
+    shortP8Open := false
+    shortP9Open := false
+    shortP10Open := false
+    for i = 0 to strategy.opentrades - 1
+        eid = strategy.opentrades.entry_id(i)
+        if str.contains(eid, "Short P")
+            lev_str = str.substring(eid, 7, str.length(eid))
+            lev = int(str.tonumber(lev_str))
+            switch lev
+                0 => shortP0Open := true
+                1 => shortP1Open := true
+                2 => shortP2Open := true
+                3 => shortP3Open := true
+                4 => shortP4Open := true
+                5 => shortP5Open := true
+                6 => shortP6Open := true
+                7 => shortP7Open := true
+                8 => shortP8Open := true
+                9 => shortP9Open := true
+                10 => shortP10Open := true
+
+// === Детекция частичного закрытия ===
+if stopPyramidingAfterPartial and strategy.position_size != 0 and math.abs(strategy.position_size) < math.abs(strategy.position_size[1])
+    partialCloseOccurred := true
+
+// === Calculate weighted average entry ===
+float weighted_long_avg = na
+if strategy.position_size > 0
+    float ts = 0.0
+    float tv = 0.0
+    if longP0Open
+        ts += longP0Size
+        tv += longP0Size * longP0EntryPrice
+    if longP1Open
+        ts += longP1Size
+        tv += longP1Size * longP1EntryPrice
+    if longP2Open
+        ts += longP2Size
+        tv += longP2Size * longP2EntryPrice
+    if longP3Open
+        ts += longP3Size
+        tv += longP3Size * longP3EntryPrice
+    if longP4Open
+        ts += longP4Size
+        tv += longP4Size * longP4EntryPrice
+    if longP5Open
+        ts += longP5Size
+        tv += longP5Size * longP5EntryPrice
+    if longP6Open
+        ts += longP6Size
+        tv += longP6Size * longP6EntryPrice
+    if longP7Open
+        ts += longP7Size
+        tv += longP7Size * longP7EntryPrice
+    if longP8Open
+        ts += longP8Size
+        tv += longP8Size * longP8EntryPrice
+    if longP9Open
+        ts += longP9Size
+        tv += longP9Size * longP9EntryPrice
+    if longP10Open
+        ts += longP10Size
+        tv += longP10Size * longP10EntryPrice
+    weighted_long_avg := ts > 0 ? tv / ts : na
+
+float weighted_short_avg = na
+if strategy.position_size < 0
+    float ts = 0.0
+    float tv = 0.0
+    if shortP0Open
+        ts += shortP0Size
+        tv += shortP0Size * shortP0EntryPrice
+    if shortP1Open
+        ts += shortP1Size
+        tv += shortP1Size * shortP1EntryPrice
+    if shortP2Open
+        ts += shortP2Size
+        tv += shortP2Size * shortP2EntryPrice
+    if shortP3Open
+        ts += shortP3Size
+        tv += shortP3Size * shortP3EntryPrice
+    if shortP4Open
+        ts += shortP4Size
+        tv += shortP4Size * shortP4EntryPrice
+    if shortP5Open
+        ts += shortP5Size
+        tv += shortP5Size * shortP5EntryPrice
+    if shortP6Open
+        ts += shortP6Size
+        tv += shortP6Size * shortP6EntryPrice
+    if shortP7Open
+        ts += shortP7Size
+        tv += shortP7Size * shortP7EntryPrice
+    if shortP8Open
+        ts += shortP8Size
+        tv += shortP8Size * shortP8EntryPrice
+    if shortP9Open
+        ts += shortP9Size
+        tv += shortP9Size * shortP9EntryPrice
+    if shortP10Open
+        ts += shortP10Size
+        tv += shortP10Size * shortP10EntryPrice
+    weighted_short_avg := ts > 0 ? tv / ts : na
+
+float avg_entry = na
+avg_entry := strategy.position_size > 0 ? weighted_long_avg : strategy.position_size < 0 ? weighted_short_avg : na
+
+// --- Входы (базовая позиция P0) ---
+if (not na(k) and not na(d) and strategy.position_size == 0)
+    if primary_long_signal and long_filters and not inDisabledTime and canTrade and not justClosedLong
+        if useBarStop
+            longStopLine := low - stopOffset
+        longInitialRisk := close - longStopLine
+        long_qty = (baseLongQty / 100.0) * strategy.equity / close
+        strategy.entry("Long P0", strategy.long, qty=long_qty)
+        longP0Entry := close
+        longP0Size := long_qty
+        longP0EntryPrice := close
+        longEntryPrice := close
+        longBreakevenTrig := close + longInitialRisk
+        partialCloseOccurred := false
+        trailingLongStop := longStopLine
+        long_be_active := false
+        long_filtered := false
+    else if primary_long_signal and not long_filters
+        long_filtered := true
+
+    if use_secondary_stoch and long_filtered and secondary_long_signal and long_filters and not inDisabledTime and canTrade and not justClosedLong
+        if useBarStop
+            longStopLine := low - stopOffset
+        longInitialRisk := close - longStopLine
+        long_qty = (baseLongQty / 100.0) * strategy.equity / close
+        strategy.entry("Long P0", strategy.long, qty=long_qty)
+        longP0Entry := close
+        longP0Size := long_qty
+        longP0EntryPrice := close
+        longEntryPrice := close
+        longBreakevenTrig := close + longInitialRisk
+        partialCloseOccurred := false
+        trailingLongStop := longStopLine
+        long_be_active := false
+        long_filtered := false
+
+    if primary_short_signal and short_filters and not inDisabledTime and canTrade and not justClosedShort
+        if useBarStop
+            shortStopLine := high + stopOffset
+        shortInitialRisk := shortStopLine - close
+        short_qty = (baseShortQty / 100.0) * strategy.equity / close
+        strategy.entry("Short P0", strategy.short, qty=short_qty)
+        shortP0Entry := close
+        shortP0Size := short_qty
+        shortP0EntryPrice := close
+        shortEntryPrice := close
+        shortBreakevenTrig := close - shortInitialRisk
+        partialCloseOccurred := false
+        trailingShortStop := shortStopLine
+        short_be_active := false
+        short_filtered := false
+    else if primary_short_signal and not short_filters
+        short_filtered := true
+
+    if use_secondary_stoch and short_filtered and secondary_short_signal and short_filters and not inDisabledTime and canTrade and not justClosedShort
+        if useBarStop
+            shortStopLine := high + stopOffset
+        shortInitialRisk := shortStopLine - close
+        short_qty = (baseShortQty / 100.0) * strategy.equity / close
+        strategy.entry("Short P0", strategy.short, qty=short_qty)
+        shortP0Entry := close
+        shortP0Size := short_qty
+        shortP0EntryPrice := close
+        shortEntryPrice := close
+        shortBreakevenTrig := close - shortInitialRisk
+        partialCloseOccurred := false
+        trailingShortStop := shortStopLine
+        short_be_active := false
+        short_filtered := false
+
+// === Безубыток для базовой позиции ===
+if useBreakeven and strategy.position_size > 0 and longP0Open and not long_be_active and close >= longBreakevenTrig
+    long_be_active := true
+
+if useBreakeven and strategy.position_size < 0 and shortP0Open and not short_be_active and close <= shortBreakevenTrig
+    short_be_active := true
+
+// === ЛОНГ ПИРАМИДКИ ===
+allowFurtherPyramid = not stopPyramidingAfterPartial or not partialCloseOccurred
+if strategy.position_size > 0 and not na(longP0Entry) and allowFurtherPyramid and not inDisabledTime
+    step = longInitialRisk
+    for int level = 2 to 11
+        float level_k = longP0Entry + level * step
+        pyramid_num = level - 1
+        bool is_open = switch pyramid_num
+            1 => longP1Open
+            2 => longP2Open
+            3 => longP3Open
+            4 => longP4Open
+            5 => longP5Open
+            6 => longP6Open
+            7 => longP7Open
+            8 => longP8Open
+            9 => longP9Open
+            10 => longP10Open
+            => false
+        if close >= level_k and not is_open
+            string entry_id = "Long P" + str.tostring(pyramid_num)
+            pyramid_qty_percent = switch pyramid_num
+                1 => longP1Qty
+                2 => longP2Qty
+                3 => longP3Qty
+                4 => longP4Qty
+                5 => longP5Qty
+                6 => longP6Qty
+                7 => longP7Qty
+                8 => longP8Qty
+                9 => longP9Qty
+                10 => longP10Qty
+                => 10.0
+            pyramid_qty = (pyramid_qty_percent / 100.0) * strategy.equity / close
+            strategy.entry(entry_id, strategy.long, qty=pyramid_qty)
+            // Update vars for new
+            switch pyramid_num
+                1 => 
+                    longP1EntryPrice := close
+                    longP1Size := pyramid_qty
+                2 => 
+                    longP2EntryPrice := close
+                    longP2Size := pyramid_qty
+                3 => 
+                    longP3EntryPrice := close
+                    longP3Size := pyramid_qty
+                4 => 
+                    longP4EntryPrice := close
+                    longP4Size := pyramid_qty
+                5 => 
+                    longP5EntryPrice := close
+                    longP5Size := pyramid_qty
+                6 => 
+                    longP6EntryPrice := close
+                    longP6Size := pyramid_qty
+                7 => 
+                    longP7EntryPrice := close
+                    longP7Size := pyramid_qty
+                8 => 
+                    longP8EntryPrice := close
+                    longP8Size := pyramid_qty
+                9 => 
+                    longP9EntryPrice := close
+                    longP9Size := pyramid_qty
+                10 => 
+                    longP10EntryPrice := close
+                    longP10Size := pyramid_qty
+
+// === ШОРТ ПИРАМИДКИ ===
+if strategy.position_size < 0 and not na(shortP0Entry) and allowFurtherPyramid and not inDisabledTime
+    step = shortInitialRisk
+    for int level = 2 to 11
+        float level_k = shortP0Entry - level * step
+        pyramid_num = level - 1
+        bool is_open = switch pyramid_num
+            1 => shortP1Open
+            2 => shortP2Open
+            3 => shortP3Open
+            4 => shortP4Open
+            5 => shortP5Open
+            6 => shortP6Open
+            7 => shortP7Open
+            8 => shortP8Open
+            9 => shortP9Open
+            10 => shortP10Open
+            => false
+        if close <= level_k and not is_open
+            string entry_id = "Short P" + str.tostring(pyramid_num)
+            pyramid_qty_percent = switch pyramid_num
+                1 => shortP1Qty
+                2 => shortP2Qty
+                3 => shortP3Qty
+                4 => shortP4Qty
+                5 => shortP5Qty
+                6 => shortP6Qty
+                7 => shortP7Qty
+                8 => shortP8Qty
+                9 => shortP9Qty
+                10 => shortP10Qty
+                => 10.0
+            pyramid_qty = (pyramid_qty_percent / 100.0) * strategy.equity / close
+            strategy.entry(entry_id, strategy.short, qty=pyramid_qty)
+            // Update vars for new
+            switch pyramid_num
+                1 => 
+                    shortP1EntryPrice := close
+                    shortP1Size := pyramid_qty
+                2 => 
+                    shortP2EntryPrice := close
+                    shortP2Size := pyramid_qty
+                3 => 
+                    shortP3EntryPrice := close
+                    shortP3Size := pyramid_qty
+                4 => 
+                    shortP4EntryPrice := close
+                    shortP4Size := pyramid_qty
+                5 => 
+                    shortP5EntryPrice := close
+                    shortP5Size := pyramid_qty
+                6 => 
+                    shortP6EntryPrice := close
+                    shortP6Size := pyramid_qty
+                7 => 
+                    shortP7EntryPrice := close
+                    shortP7Size := pyramid_qty
+                8 => 
+                    shortP8EntryPrice := close
+                    shortP8Size := pyramid_qty
+                9 => 
+                    shortP9EntryPrice := close
+                    shortP9Size := pyramid_qty
+                10 => 
+                    shortP10EntryPrice := close
+                    shortP10Size := pyramid_qty
+
+// Update trailing stops
+if useTrailingStop and strategy.position_size > 0 and long_be_active and not na(avg_entry)
+    trailingLongStop := avg_entry * (1 + trailing_offset_percent)
+
+if useTrailingStop and strategy.position_size > 0 and not long_be_active
+    trailingLongStop := longStopLine
+
+if useTrailingStop and strategy.position_size < 0 and short_be_active and not na(avg_entry)
+    trailingShortStop := avg_entry * (1 - trailing_offset_percent)
+
+if useTrailingStop and strategy.position_size < 0 and not short_be_active
+    trailingShortStop := shortStopLine
+
+trailingLongHit = useTrailingStop and strategy.position_size > 0 and low <= trailingLongStop
+trailingShortHit = useTrailingStop and strategy.position_size < 0 and high >= trailingShortStop
+
+beLongStop = long_be_active and not na(avg_entry) ? avg_entry * (1 + offset_percent) : longStopLine
+beShortStop = short_be_active and not na(avg_entry) ? avg_entry * (1 - offset_percent) : shortStopLine
+
+longStopLevel = useTrailingStop ? trailingLongStop : beLongStop
+shortStopLevel = useTrailingStop ? trailingShortStop : beShortStop
+
+longStopHit = strategy.position_size > 0 and low <= longStopLevel
+shortStopHit = strategy.position_size < 0 and high >= shortStopLevel
+
+// --- Выход по Slow MA ---
+ma_exit_long = use_ma_exit and strategy.position_size > 0 and ta.crossunder(close, slow_ma)
+ma_exit_short = use_ma_exit and strategy.position_size < 0 and ta.crossover(close, slow_ma)
+
+// --- Выход по MA Pair Crossover ---
+ma_pair_exit_long = use_ma_pair_exit and strategy.position_size > 0 and ta.crossunder(fast_ma, slow_ma)
+ma_pair_exit_short = use_ma_pair_exit and strategy.position_size < 0 and ta.crossover(fast_ma, slow_ma)
+
+// --- Выход по Extra MA 1 ---
+extra_ma1_exit_long = use_extra_ma1_filter and strategy.position_size > 0 and ta.crossunder(close, extra_ma1)
+extra_ma1_exit_short = use_extra_ma1_filter and strategy.position_size < 0 and ta.crossover(close, extra_ma1)
+
+// --- Выход по Extra MA 2 ---
+extra_ma2_exit_long = use_extra_ma2_filter and strategy.position_size > 0 and ta.crossunder(close, extra_ma2)
+extra_ma2_exit_short = use_extra_ma2_filter and strategy.position_size < 0 and ta.crossover(close, extra_ma2)
+
+// --- Выход по Stochastic ---
+stoch_exit_long = use_stoch_exit and strategy.position_size > 0 and cu
+stoch_exit_short = use_stoch_exit and strategy.position_size < 0 and co
+
+// --- Выход по MACD ---
+macd_exit_long = use_macd_exit and strategy.position_size > 0 and not macdFilterPassLong
+macd_exit_short = use_macd_exit and strategy.position_size < 0 and not macdFilterPassShort
+
+// --- Выход по Bar Color ---
+green_bar = close > fast_ma and low > fast_ma
+red_bar = close < fast_ma and high < fast_ma
+bar_color_exit_long = use_bar_color_exit and strategy.position_size > 0 and red_bar
+bar_color_exit_short = use_bar_color_exit and strategy.position_size < 0 and green_bar
+
+// --- Выход по времени ---
+bool time_exit_trigger_long = false
+if strategy.position_size > 0
+    entry_bar = strategy.opentrades.entry_bar_index(strategy.opentrades - 1)
+    bars_in_trade = bar_index - entry_bar
+    time_exit_trigger_long := bars_in_trade >= exit_bars
+
+bool time_exit_trigger_short = false
+if strategy.position_size < 0
+    entry_bar = strategy.opentrades.entry_bar_index(strategy.opentrades - 1)
+    bars_in_trade = bar_index - entry_bar
+    time_exit_trigger_short := bars_in_trade >= exit_bars
+
+// --- Weekend Exit ---
+weekend_exit_long = enableTimeFilter and inDisabledTime and strategy.position_size > 0
+weekend_exit_short = enableTimeFilter and inDisabledTime and strategy.position_size < 0
+
+// Global exits
+globalExitLong = longStopHit or ma_exit_long or ma_pair_exit_long or time_exit_trigger_long or stoch_exit_long or extra_ma1_exit_long or extra_ma2_exit_long or macd_exit_long or bar_color_exit_long or weekend_exit_long
+globalExitShort = shortStopHit or ma_exit_short or ma_pair_exit_short or time_exit_trigger_short or stoch_exit_short or extra_ma1_exit_short or extra_ma2_exit_short or macd_exit_short or bar_color_exit_short or weekend_exit_short
+
+string long_exit_comment = na
+if longStopHit
+    long_exit_comment := "Stop Hit Long All"
+else if ma_exit_long
+    long_exit_comment := "Slow MA Exit Long"
+else if ma_pair_exit_long
+    long_exit_comment := "MA Pair Exit Long"
+else if macd_exit_long
+    long_exit_comment := "MACD Exit Long"
+else if stoch_exit_long
+    long_exit_comment := "Stoch Exit Long"
+else if time_exit_trigger_long
+    long_exit_comment := "Time Exit Long"
+else if extra_ma1_exit_long
+    long_exit_comment := "Extra MA1 Exit Long"
+else if extra_ma2_exit_long
+    long_exit_comment := "Extra MA2 Exit Long"
+else if bar_color_exit_long
+    long_exit_comment := "Bar Color Exit Long"
+else if weekend_exit_long
+    long_exit_comment := "Weekend Exit Long"
+
+string short_exit_comment = na
+if shortStopHit
+    short_exit_comment := "Stop Hit Short All"
+else if ma_exit_short
+    short_exit_comment := "Slow MA Exit Short"
+else if ma_pair_exit_short
+    short_exit_comment := "MA Pair Exit Short"
+else if macd_exit_short
+    short_exit_comment := "MACD Exit Short"
+else if stoch_exit_short
+    short_exit_comment := "Stoch Exit Short"
+else if time_exit_trigger_short
+    short_exit_comment := "Time Exit Short"
+else if extra_ma1_exit_short
+    short_exit_comment := "Extra MA1 Exit Short"
+else if extra_ma2_exit_short
+    short_exit_comment := "Extra MA2 Exit Short"
+else if bar_color_exit_short
+    short_exit_comment := "Bar Color Exit Short"
+else if weekend_exit_short
+    short_exit_comment := "Weekend Exit Short"
+
+if globalExitLong
+    intendedExitPrice := longStopHit ? longStopLevel : close
+    savedAvgPrice := avg_entry
+    savedPositionSize := strategy.position_size
+    strategy.close_all(long_exit_comment)
+    justClosedLong := true
+
+if globalExitShort
+    intendedExitPrice := shortStopHit ? shortStopLevel : close
+    savedAvgPrice := avg_entry
+    savedPositionSize := strategy.position_size
+    strategy.close_all(short_exit_comment)
+    justClosedShort := true
+
+// Weekend lines
+if inDisabledTime
+    if day == dayofweek.friday and h == friDisableHour and minute(time) == 0
+        line.new(bar_index, low, bar_index, high, color=color.black, style=line.style_dotted, width=2)
+    if day == dayofweek.sunday and h == sunEnableHour and minute(time) == 0
+        line.new(bar_index, low, bar_index, high, color=color.black, style=line.style_dotted, width=2)
+
+// === Сброс при закрытии позиции ===
+if strategy.position_size == 0 and strategy.position_size[1] != 0
+    longP0Open := false
+    longP1Open := false
+    longP2Open := false
+    longP3Open := false
+    longP4Open := false
+    longP5Open := false
+    longP6Open := false
+    longP7Open := false
+    longP8Open := false
+    longP9Open := false
+    longP10Open := false
+    shortP0Open := false
+    shortP1Open := false
+    shortP2Open := false
+    shortP3Open := false
+    shortP4Open := false
+    shortP5Open := false
+    shortP6Open := false
+    shortP7Open := false
+    shortP8Open := false
+    shortP9Open := false
+    shortP10Open := false
+    partialCloseOccurred := false
+    longInitialRisk := na
+    shortInitialRisk := na
+    longP0Size := na
+    longP1Size := na
+    longP2Size := na
+    longP3Size := na
+    longP4Size := na
+    longP5Size := na
+    longP6Size := na
+    longP7Size := na
+    longP8Size := na
+    longP9Size := na
+    longP10Size := na
+    shortP0Size := na
+    shortP1Size := na
+    shortP2Size := na
+    shortP3Size := na
+    shortP4Size := na
+    shortP5Size := na
+    shortP6Size := na
+    shortP7Size := na
+    shortP8Size := na
+    shortP9Size := na
+    shortP10Size := na
+    longP0EntryPrice := na
+    longP1EntryPrice := na
+    longP2EntryPrice := na
+    longP3EntryPrice := na
+    longP4EntryPrice := na
+    longP5EntryPrice := na
+    longP6EntryPrice := na
+    longP7EntryPrice := na
+    longP8EntryPrice := na
+    longP9EntryPrice := na
+    longP10EntryPrice := na
+    shortP0EntryPrice := na
+    shortP1EntryPrice := na
+    shortP2EntryPrice := na
+    shortP3EntryPrice := na
+    shortP4EntryPrice := na
+    shortP5EntryPrice := na
+    shortP6EntryPrice := na
+    shortP7EntryPrice := na
+    shortP8EntryPrice := na
+    shortP9EntryPrice := na
+    shortP10EntryPrice := na
+    longP0Entry := na
+    shortP0Entry := na
+    trailingLongStop := na
+    trailingShortStop := na
+    long_be_active := false
+    short_be_active := false
+    // Показываем P&L при закрытии
+    float display_pnl = na
+    if not na(savedPositionSize)
+        if savedPositionSize > 0
+            display_pnl := (intendedExitPrice - savedAvgPrice) * savedPositionSize
+        else
+            display_pnl := (savedAvgPrice - intendedExitPrice) * math.abs(savedPositionSize)
+        hypNetProfit += display_pnl
+        y_pos = strategy.position_size[1] > 0 ? low : high
+        style_label = strategy.position_size[1] > 0 ? label.style_label_up : label.style_label_down
+        label.new(bar_index, y_pos, text=str.tostring(math.round(display_pnl)), style=style_label, color=display_pnl >= 0 ? color.green : color.red, textcolor=color.white, size=size.small)
+    intendedExitPrice := na
+    savedAvgPrice := na
+    savedPositionSize := na
+
+// === Чистка при выходе ===
+if strategy.position_size[1] != 0 and strategy.position_size == 0
+    longStopLine  := na
+    shortStopLine := na
+    longEntryPrice     := na
+    shortEntryPrice    := na
+    longBreakevenTrig  := na
+    shortBreakevenTrig := na
+    trailingLongStop := na
+    trailingShortStop := na
+
+// --- Плоттинг MAs ---
+plot(fast_ma, color=color.orange, title="Fast MA", linewidth=2)
+plot(slow_ma, color=color.blue, title="Slow MA", linewidth=2)
+plot(extra_ma1, color=color.purple, title="Extra MA 1", linewidth=2)
+plot(extra_ma2, color=color.green, title="Extra MA 2", linewidth=2)
+
+plot(macd_j1,   color=color.gray,   linewidth=1, title="MACD J1")
+plot(macd_j2,   color=color.blue,   linewidth=1, title="MACD J2")
+plot(macd_s1_1, color=color.orange, linewidth=1, title="MACD S1_1")
+plot(macd_s1_2, color=color.red,    linewidth=1, title="MACD S1_2")
+hline(0, "MACD Zero Line", color=color.red, linestyle=hline.style_dotted, linewidth=1)
+
+// === Плот Average Entry ===
+avgEntryPlot = strategy.position_size != 0 ? avg_entry : na
+plot(avgEntryPlot, title="Average Entry", color=color.aqua, linewidth=2, style=plot.style_stepline, trackprice=true)
+
+// Stop line
+float stop_line_plot = na
+if strategy.position_size > 0
+    stop_line_plot := longStopLevel
+else if strategy.position_size < 0
+    stop_line_plot := shortStopLevel
+plot(stop_line_plot, title="Stop", color=color.red, style=plot.style_stepline, linewidth=2)
+
+// Визуал входа, BE, пирамид
+plot(strategy.position_size > 0 and not na(longEntryPrice) ? longEntryPrice : na, title="Long Entry", color=color.blue, style=plot.style_stepline, linewidth=2)
+plot(strategy.position_size < 0 and not na(shortEntryPrice) ? shortEntryPrice : na, title="Short Entry", color=color.blue, style=plot.style_stepline, linewidth=2)
+plot(useBreakeven and strategy.position_size > 0 and not na(longBreakevenTrig) ? longBreakevenTrig : na, title="Long BE Trigger", color=color.purple, style=plot.style_stepline, linewidth=2)
+plot(useBreakeven and strategy.position_size < 0 and not na(shortBreakevenTrig) ? shortBreakevenTrig : na, title="Short BE Trigger", color=color.purple, style=plot.style_stepline, linewidth=2)
+
+pyramidGray = color.new(color.gray, 80)
+longRisk = strategy.position_size > 0 and not na(longEntryPrice) and not na(longStopLine) ? (longEntryPrice - longStopLine) : na
+shortRisk = strategy.position_size < 0 and not na(shortEntryPrice) and not na(shortStopLine) ? (shortStopLine - shortEntryPrice) : na
+plot(strategy.position_size > 0 and not na(longEntryPrice) ? longEntryPrice + 2 * longRisk : na, title="Long Pyramid 1", color=pyramidGray, style=plot.style_stepline, linewidth=2)
+plot(strategy.position_size > 0 and not na(longEntryPrice) ? longEntryPrice + 3 * longRisk : na, title="Long Pyramid 2", color=pyramidGray, style=plot.style_stepline, linewidth=2)
+plot(strategy.position_size > 0 and not na(longEntryPrice) ? longEntryPrice + 4 * longRisk : na, title="Long Pyramid 3", color=pyramidGray, style=plot.style_stepline, linewidth=2)
+plot(strategy.position_size > 0 and not na(longEntryPrice) ? longEntryPrice + 5 * longRisk : na, title="Long Pyramid 4", color=pyramidGray, style=plot.style_stepline, linewidth=2)
+plot(strategy.position_size > 0 and not na(longEntryPrice) ? longEntryPrice + 6 * longRisk : na, title="Long Pyramid 5", color=pyramidGray, style=plot.style_stepline, linewidth=2)
+plot(strategy.position_size > 0 and not na(longEntryPrice) ? longEntryPrice + 7 * longRisk : na, title="Long Pyramid 6", color=pyramidGray, style=plot.style_stepline, linewidth=2)
+plot(strategy.position_size > 0 and not na(longEntryPrice) ? longEntryPrice + 8 * longRisk : na, title="Long Pyramid 7", color=pyramidGray, style=plot.style_stepline, linewidth=2)
+plot(strategy.position_size > 0 and not na(longEntryPrice) ? longEntryPrice + 9 * longRisk : na, title="Long Pyramid 8", color=pyramidGray, style=plot.style_stepline, linewidth=2)
+plot(strategy.position_size > 0 and not na(longEntryPrice) ? longEntryPrice + 10 * longRisk : na, title="Long Pyramid 9", color=pyramidGray, style=plot.style_stepline, linewidth=2)
+plot(strategy.position_size > 0 and not na(longEntryPrice) ? longEntryPrice + 11 * longRisk : na, title="Long Pyramid 10", color=pyramidGray, style=plot.style_stepline, linewidth=2)
+
+plot(strategy.position_size < 0 and not na(shortEntryPrice) ? shortEntryPrice - 2 * shortRisk : na, title="Short Pyramid 1", color=pyramidGray, style=plot.style_stepline, linewidth=2)
+plot(strategy.position_size < 0 and not na(shortEntryPrice) ? shortEntryPrice - 3 * shortRisk : na, title="Short Pyramid 2", color=pyramidGray, style=plot.style_stepline, linewidth=2)
+plot(strategy.position_size < 0 and not na(shortEntryPrice) ? shortEntryPrice - 4 * shortRisk : na, title="Short Pyramid 3", color=pyramidGray, style=plot.style_stepline, linewidth=2)
+plot(strategy.position_size < 0 and not na(shortEntryPrice) ? shortEntryPrice - 5 * shortRisk : na, title="Short Pyramid 4", color=pyramidGray, style=plot.style_stepline, linewidth=2)
+plot(strategy.position_size < 0 and not na(shortEntryPrice) ? shortEntryPrice - 6 * shortRisk : na, title="Short Pyramid 5", color=pyramidGray, style=plot.style_stepline, linewidth=2)
+plot(strategy.position_size < 0 and not na(shortEntryPrice) ? shortEntryPrice - 7 * shortRisk : na, title="Short Pyramid 6", color=pyramidGray, style=plot.style_stepline, linewidth=2)
+plot(strategy.position_size < 0 and not na(shortEntryPrice) ? shortEntryPrice - 8 * shortRisk : na, title="Short Pyramid 7", color=pyramidGray, style=plot.style_stepline, linewidth=2)
+plot(strategy.position_size < 0 and not na(shortEntryPrice) ? shortEntryPrice - 9 * shortRisk : na, title="Short Pyramid 8", color=pyramidGray, style=plot.style_stepline, linewidth=2)
+plot(strategy.position_size < 0 and not na(shortEntryPrice) ? shortEntryPrice - 10 * shortRisk : na, title="Short Pyramid 9", color=pyramidGray, style=plot.style_stepline, linewidth=2)
+plot(strategy.position_size < 0 and not na(shortEntryPrice) ? shortEntryPrice - 11 * shortRisk : na, title="Short Pyramid 10", color=pyramidGray, style=plot.style_stepline, linewidth=2)
+
+// === Bar coloring (Fast MA) ===
+barColor = close > fast_ma and low > fast_ma ? color.green : close < fast_ma and high < fast_ma ? color.red : color.gray
+barcolor(barColor)
+
+// === Background coloring ===
+aboveAll = true
+if useMacdJ1 and close <= macd_j1
+    aboveAll := false
+if useMacdJ2 and close <= macd_j2
+    aboveAll := false
+if useMacdS11 and close <= macd_s1_1
+    aboveAll := false
+if useMacdS12 and close <= macd_s1_2
+    aboveAll := false
+
+belowAll = true
+if useMacdJ1 and close >= macd_j1
+    belowAll := false
+if useMacdJ2 and close >= macd_j2
+    belowAll := false
+if useMacdS11 and close >= macd_s1_1
+    belowAll := false
+if useMacdS12 and close >= macd_s1_2
+    belowAll := false
+
+bgcolor(aboveAll ? color.new(color.green, 90) : belowAll ? color.new(color.red, 90) : color.new(color.gray, 90))
+
+// Additional backgrounds
+pauseActive = not canTrade and strategy.position_size == 0
+bgcolor(pauseActive ? color.new(color.yellow, 70) : na, title="Pause Background")
+bgcolor(inDisabledTime ? color.new(color.black, 85) : na, title="Disabled Time Background")
