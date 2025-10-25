@@ -1,0 +1,36 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Grizzly_Pitt
+
+//@version=5
+strategy("Grizzly's 20 EMA Strategy", overlay=true, margin_long=100, margin_short=100, initial_capital=1000, default_qty_type=strategy.percent_of_equity, default_qty_value=100)
+
+// Параметры
+emaLength = input.int(20, "EMA Length")
+riskPercent = input.float(1.0, "Risk %", minval=0.1, maxval=100)
+
+// Расчет индикаторов
+ema20 = ta.ema(close, emaLength)
+prevBullish = close[1] > open[1]
+prevBearish = close[1] < open[1]
+
+// Условия входа
+longCondition = close > ema20 and prevBullish
+shortCondition = close < ema20 and prevBearish
+
+// Управление капиталом
+equity = strategy.initial_capital + strategy.netprofit
+riskAmount = equity * riskPercent / 100
+
+// Исполнение стратегии
+if (longCondition)
+    strategy.entry("Long", strategy.long)
+    
+if (shortCondition)
+    strategy.entry("Short", strategy.short)
+
+// Визуализация
+plot(ema20, color=color.blue, linewidth=2, title="20 EMA")
+
+// Зоны входа
+bgcolor(longCondition ? color.new(color.green, 95) : na)
+bgcolor(shortCondition ? color.new(color.red, 95) : na)
