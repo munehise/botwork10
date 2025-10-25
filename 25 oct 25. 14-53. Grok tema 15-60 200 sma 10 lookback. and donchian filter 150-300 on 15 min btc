@@ -1,0 +1,277 @@
+//@version=5
+strategy("MA with Fast Cross Filter - MA Trailing Stop + Cross Exit + Optional Donchian & MACD", overlay=true, default_qty_type=strategy.percent_of_equity, default_qty_value=1, initial_capital=10000)
+
+// === Slow MA Параметры (бывшая основная MA) ===
+slowGroup = "=== Slow MA (Main Signal) ==="
+slow_length = input.int(20, title="Slow Length", minval=1, group=slowGroup)
+slow_type = input.string("EMA", title="Slow Type", options=["SMA", "EMA", "WMA", "VWMA", "HMA", "DEMA", "TEMA", "TMA"], group=slowGroup)
+slow_source = input.source(close, title="Slow Source", group=slowGroup)
+
+// === Fast MA Параметры (Cross Filter) ===
+fastGroup = "=== Fast MA (Cross Filter) ==="
+fast_length = input.int(9, title="Fast Length", minval=1, group=fastGroup)
+fast_type = input.string("EMA", title="Fast Type", options=["SMA", "EMA", "WMA", "VWMA", "HMA", "DEMA", "TEMA", "TMA"], group=fastGroup)
+fast_source = input.source(close, title="Fast Source", group=fastGroup)
+
+// === Filter MA Параметры ===
+filterGroup = "=== Filter MA ==="
+filter_length = input.int(50, title="Filter Length", minval=1, group=filterGroup)
+filter_type = input.string("SMA", title="Filter Type", options=["SMA", "EMA", "WMA", "VWMA", "HMA", "DEMA", "TEMA", "TMA"], group=filterGroup)
+filter_source = input.source(close, title="Filter Source", group=filterGroup)
+
+// === Trailing Stop Параметры ===
+trailGroup = "=== Trailing Stop ==="
+use_trailing = input.bool(true, title="Use MA Trailing Stop", group=trailGroup)
+trail_offset = input.float(0.5, title="Trail Offset %", minval=0, step=0.01, group=trailGroup) / 100
+
+// === Cross Exit Параметры ===
+exitGroup = "=== Cross Exit ==="
+use_cross_exit = input.bool(false, title="Use Cross Exit (Optional)", group=exitGroup)
+
+// === Общие Параметры ===
+commonGroup = "=== Common ==="
+lookback = input.int(1, title="Lookback for Initial Stop", minval=1, group=commonGroup)
+
+// === Donchian Filter Option ===
+donchianGroup = "=== Donchian Filter (Optional) ==="
+use_donchian = input.bool(false, title="Use Donchian Filter?", group=donchianGroup)
+
+// Donchian Inputs (if used)
+dcHigh  = input.int(20, "Donchian High (Main)", group=donchianGroup)
+dcLow   = input.int(10, "Donchian Low (Main)", group=donchianGroup)
+dcColor = input.color(color.blue, "DC Color (Main)", group=donchianGroup)
+dcMidColor = input.color(color.blue, "DC Mid Color (Main)", group=donchianGroup)
+useTightStops = input.bool(true, "Use Tighter Stops?", group=donchianGroup)
+dcTightHigh = input.int(10, "Tight High", group=donchianGroup)
+dcTightLow  = input.int(5, "Tight Low", group=donchianGroup)
+dcTightColor = input.color(color.orange, "DC Tight Color", group=donchianGroup)
+
+// Additional Donchian Channels (if used)
+dcHigh2 = input.int(30, "Donchian High (Filter 1)", group=donchianGroup)
+dcLow2  = input.int(15, "Donchian Low (Filter 1)", group=donchianGroup)
+dcColor2 = input.color(color.purple, "DC Color (Filter 1)", group=donchianGroup)
+
+dcHigh3 = input.int(40, "Donchian High (Filter 2)", group=donchianGroup)
+dcLow3  = input.int(20, "Donchian Low (Filter 2)", group=donchianGroup)
+dcColor3 = input.color(color.teal, "DC Color (Filter 2)", group=donchianGroup)
+
+dcHigh4 = input.int(50, "Donchian High (Filter 3)", group=donchianGroup)
+dcLow4  = input.int(25, "Donchian Low (Filter 3)", group=donchianGroup)
+dcColor4 = input.color(color.yellow, "DC Color (Filter 3)", group=donchianGroup)
+
+dcHigh5 = input.int(60, "Donchian High (Filter 4)", group=donchianGroup)
+dcLow5  = input.int(30, "Donchian Low (Filter 4)", group=donchianGroup)
+dcColor5 = input.color(color.orange, "DC Color (Filter 4)", group=donchianGroup)
+
+dcHigh6 = input.int(70, "Donchian High (Filter 5)", group=donchianGroup)
+dcLow6  = input.int(35, "Donchian Low (Filter 5)", group=donchianGroup)
+dcColor6 = input.color(color.green, "DC Color (Filter 5)", group=donchianGroup)
+
+// === MACD Filter Option ===
+macdGroup = "=== MACD Filter (Optional) ==="
+use_macd = input.bool(false, title="Use MACD Filter?", group=macdGroup)
+allowReentryMACD = input.bool(false, "Reentry after MACD exit?", group=macdGroup)
+
+fast1 = input.int(12, "MACD Fast #1", group=macdGroup)
+slow1 = input.int(26, "MACD Slow #1", group=macdGroup)
+fast2 = input.int(20, "MACD Fast #2", group=macdGroup)
+slow2 = input.int(50, "MACD Slow #2", group=macdGroup)
+
+// Функция для расчета MA
+f_ma(src, length, type) =>
+    switch type
+        "SMA" => ta.sma(src, length)
+        "EMA" => ta.ema(src, length)
+        "WMA" => ta.wma(src, length)
+        "VWMA" => ta.vwma(src, length)
+        "HMA" => ta.hma(src, length)
+        "DEMA" => 2 * ta.ema(src, length) - ta.ema(ta.ema(src, length), length)
+        "TEMA" => 3 * ta.ema(src, length) - 3 * ta.ema(ta.ema(src, length), length) + ta.ema(ta.ema(ta.ema(src, length), length), length)
+        "TMA" => ta.sma(ta.sma(src, length), length)
+        => na
+
+// MACD Functions
+alpha(len) => 2.0 / (len + 1.0)
+macd_level(level, price, fast_len, slow_len) =>
+    num = level + (1 - alpha(slow_len)) * ta.ema(price, slow_len)[1] - (1 - alpha(fast_len)) * ta.ema(price, fast_len)[1]
+    den = alpha(fast_len) - alpha(slow_len)
+    den != 0 ? num / den : na
+
+// Расчет MA
+slow_ma = f_ma(slow_source, slow_length, slow_type)
+fast_ma = f_ma(fast_source, fast_length, fast_type)
+filter_ma = f_ma(filter_source, filter_length, filter_type)
+
+// === Donchian Calculations (conditional) ===
+dcUpper = use_donchian ? ta.highest(high, dcHigh) : na
+dcLower = use_donchian ? ta.lowest(low, dcLow) : na
+dcMid   = use_donchian ? math.avg(dcUpper, dcLower) : na
+dcTightUpper = use_donchian and useTightStops ? ta.highest(high, dcTightHigh) : na
+dcTightLower = use_donchian and useTightStops ? ta.lowest(low, dcTightLow) : na
+
+dcUpper2 = use_donchian ? ta.highest(high, dcHigh2) : na
+dcLower2 = use_donchian ? ta.lowest(low, dcLow2) : na
+dcUpper3 = use_donchian ? ta.highest(high, dcHigh3) : na
+dcLower3 = use_donchian ? ta.lowest(low, dcLow3) : na
+dcUpper4 = use_donchian ? ta.highest(high, dcHigh4) : na
+dcLower4 = use_donchian ? ta.lowest(low, dcLow4) : na
+dcUpper5 = use_donchian ? ta.highest(high, dcHigh5) : na
+dcLower5 = use_donchian ? ta.lowest(low, dcLow5) : na
+dcUpper6 = use_donchian ? ta.highest(high, dcHigh6) : na
+dcLower6 = use_donchian ? ta.lowest(low, dcLow6) : na
+
+// === Donchian Direction Logic (conditional) ===
+var bool dc1Up = false
+var bool dc2Up = false
+var bool dc3Up = false
+var bool dc4Up = false
+var bool dc5Up = false
+var bool dc6Up = false
+
+if use_donchian
+    if ta.crossover(high, dcUpper[1])
+        dc1Up := true
+    if ta.crossunder(low, dcLower[1])
+        dc1Up := false
+
+    if ta.crossover(high, dcUpper2[1])
+        dc2Up := true
+    if ta.crossunder(low, dcLower2[1])
+        dc2Up := false
+
+    if ta.crossover(high, dcUpper3[1])
+        dc3Up := true
+    if ta.crossunder(low, dcLower3[1])
+        dc3Up := false
+
+    if ta.crossover(high, dcUpper4[1])
+        dc4Up := true
+    if ta.crossunder(low, dcLower4[1])
+        dc4Up := false
+
+    if ta.crossover(high, dcUpper5[1])
+        dc5Up := true
+    if ta.crossunder(low, dcLower5[1])
+        dc5Up := false
+
+    if ta.crossover(high, dcUpper6[1])
+        dc6Up := true
+    if ta.crossunder(low, dcLower6[1])
+        dc6Up := false
+
+donchian_long_filter = not use_donchian or (dc1Up and dc2Up and dc3Up and dc4Up and dc5Up and dc6Up)
+donchian_short_filter = not use_donchian or (not dc1Up and not dc2Up and not dc3Up and not dc4Up and not dc5Up and not dc6Up)
+
+// === MACD Filter (conditional) ===
+src_macd = close
+zl1 = use_macd ? macd_level(0, src_macd, fast1, slow1) : na
+zl2 = use_macd ? macd_level(0, src_macd, fast2, slow2) : na
+
+allMacdAbove = not use_macd or (close > zl1 and close > zl2)
+allMacdBelow = not use_macd or (close < zl1 and close < zl2)
+
+// === Donchian Plots (conditional) ===
+plot(use_donchian ? dcUpper : na, "DC Upper", color=dcColor, linewidth=2)
+plot(use_donchian ? dcLower : na, "DC Lower", color=dcColor, linewidth=2)
+plot(use_donchian ? dcMid : na, "DC Mid", color=dcMidColor, linewidth=1)
+plot(use_donchian and useTightStops ? dcTightUpper : na, "DC Tight Upper", color=dcTightColor, linewidth=2)
+plot(use_donchian and useTightStops ? dcTightLower : na, "DC Tight Lower", color=dcTightColor, linewidth=2)
+plot(use_donchian ? dcUpper2 : na, "DC Upper 2", color=dcColor2, linewidth=1)
+plot(use_donchian ? dcLower2 : na, "DC Lower 2", color=dcColor2, linewidth=1)
+plot(use_donchian ? dcUpper3 : na, "DC Upper 3", color=dcColor3, linewidth=1)
+plot(use_donchian ? dcLower3 : na, "DC Lower 3", color=dcColor3, linewidth=1)
+plot(use_donchian ? dcUpper4 : na, "DC Upper 4", color=dcColor4, linewidth=1)
+plot(use_donchian ? dcLower4 : na, "DC Lower 4", color=dcColor4, linewidth=1)
+plot(use_donchian ? dcUpper5 : na, "DC Upper 5", color=dcColor5, linewidth=1)
+plot(use_donchian ? dcLower5 : na, "DC Lower 5", color=dcColor5, linewidth=1)
+plot(use_donchian ? dcUpper6 : na, "DC Upper 6", color=dcColor6, linewidth=1)
+plot(use_donchian ? dcLower6 : na, "DC Lower 6", color=dcColor6, linewidth=1)
+
+// === MACD Plots (conditional) ===
+plot(use_macd ? zl1 : na, "MACD ZeroLine 1", color=color.red, linewidth=2)
+plot(use_macd ? zl2 : na, "MACD ZeroLine 2", color=color.blue, linewidth=2)
+
+// Условия для свечей
+bullish_prev = close[1] > open[1]  // Предыдущая свеча бычья
+bearish_prev = close[1] < open[1]  // Предыдущая свеча медвежья
+
+// Основные условия сигнала (на slow_ma)
+long_signal_base = close > slow_ma and bullish_prev
+short_signal_base = close < slow_ma and bearish_prev
+
+// Cross Filter: fast_ma > slow_ma для long, fast_ma < slow_ma для short
+cross_long_filter = fast_ma > slow_ma
+cross_short_filter = fast_ma < slow_ma
+
+// Фильтр по Filter MA
+filter_long_allowed = close > filter_ma
+filter_short_allowed = close < filter_ma
+
+// Финальные условия входа (base + cross filter + filter MA + optional Donchian + MACD)
+long_condition = long_signal_base and cross_long_filter and filter_long_allowed and donchian_long_filter and allMacdAbove
+short_condition = short_signal_base and cross_short_filter and filter_short_allowed and donchian_short_filter and allMacdBelow
+
+// Cross Exit условия
+cross_exit_long = ta.crossunder(fast_ma, slow_ma)  // Fast под Slow — выход из лонг
+cross_exit_short = ta.crossover(fast_ma, slow_ma)  // Fast над Slow — выход из шорт
+
+// Экстремумы для начального стопа
+long_stop_level = ta.lowest(low[1], lookback)
+short_stop_level = ta.highest(high[1], lookback)
+
+// Переменные для trailing стопа
+var float trailing_long_stop = na
+var float trailing_short_stop = na
+
+// Вход в лонг: закрываем шорт, если открыт, и входим с начальным стопом
+if long_condition
+    if strategy.position_size < 0
+        strategy.close("Short")
+    strategy.entry("Long", strategy.long)
+    trailing_long_stop := long_stop_level  // Начальный стоп
+    strategy.exit("Stop Long", from_entry="Long", stop=trailing_long_stop)
+
+// Вход в шорт: закрываем лонг, если открыт, и входим с начальным стопом
+if short_condition
+    if strategy.position_size > 0
+        strategy.close("Long")
+    strategy.entry("Short", strategy.short)
+    trailing_short_stop := short_stop_level  // Начальный стоп
+    strategy.exit("Stop Short", from_entry="Short", stop=trailing_short_stop)
+
+// Обновление trailing стопа по slow_ma (если включено)
+if strategy.position_size > 0 and use_trailing
+    new_trail_stop = slow_ma * (1 - trail_offset)  // Ниже slow_ma на offset
+    trailing_long_stop := math.max(nz(trailing_long_stop), new_trail_stop)  // Ratchet up
+    strategy.exit("Stop Long", from_entry="Long", stop=trailing_long_stop)
+
+if strategy.position_size < 0 and use_trailing
+    new_trail_stop = slow_ma * (1 + trail_offset)  // Выше slow_ma на offset
+    trailing_short_stop := math.min(nz(trailing_short_stop), new_trail_stop)  // Ratchet down
+    strategy.exit("Stop Short", from_entry="Short", stop=trailing_short_stop)
+
+// Опциональный выход по кроссу (если включено)
+if use_cross_exit
+    if strategy.position_size > 0 and cross_exit_long
+        strategy.close("Long", comment="Cross Exit Long")
+    if strategy.position_size < 0 and cross_exit_short
+        strategy.close("Short", comment="Cross Exit Short")
+
+// Отображение MA
+plot(slow_ma, color=color.blue, title="Slow MA", linewidth=2)
+plot(fast_ma, color=color.orange, title="Fast MA (Cross Filter)", linewidth=1)
+plot(filter_ma, color=color.gray, title="Filter MA", linewidth=3)
+
+// Визуализация trailing стопов
+plot(strategy.position_size > 0 ? trailing_long_stop : na, color=color.red, style=plot.style_linebr, title="Trailing Long Stop", linewidth=2)
+plot(strategy.position_size < 0 ? trailing_short_stop : na, color=color.green, style=plot.style_linebr, title="Trailing Short Stop", linewidth=2)
+
+// Логика покраски фона на основе активной позиции (или Donchian if used)
+bgcolor(use_donchian ? (donchian_long_filter ? color.new(color.green, 90) : donchian_short_filter ? color.new(color.red, 90) : color.new(color.gray, 90)) : (strategy.position_size > 0 ? color.new(color.green, 90) : strategy.position_size < 0 ? color.new(color.red, 90) : color.new(color.gray, 90)))
+
+// Bar Coloring на основе Filter MA
+bar_above_filter = low > filter_ma
+bar_below_filter = high < filter_ma
+bar_touching_filter = not bar_above_filter and not bar_below_filter  // low <= filter_ma <= high
+
+barcolor(bar_above_filter ? color.new(color.green, 0) : bar_below_filter ? color.new(color.red, 0) : color.new(color.gray, 0))
