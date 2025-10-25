@@ -1,0 +1,59 @@
+//@version=5
+strategy("MA Simple Strategy - Fixed Extremum Stop", overlay=true, default_qty_type=strategy.percent_of_equity, default_qty_value=1, initial_capital=10000)
+
+// Параметры
+ma_length = input.int(20, title="MA Length", minval=1)
+ma_type = input.string("EMA", title="MA Type", options=["SMA", "EMA", "WMA", "VWMA", "HMA", "DEMA", "TEMA", "TMA"])
+ma_source = input.source(close, title="MA Source")
+lookback = input.int(1, title="Lookback for Extremum Stop", minval=1)
+
+// Функция для расчета MA
+f_ma(src, length, type) =>
+    switch type
+        "SMA" => ta.sma(src, length)
+        "EMA" => ta.ema(src, length)
+        "WMA" => ta.wma(src, length)
+        "VWMA" => ta.vwma(src, length)
+        "HMA" => ta.hma(src, length)
+        "DEMA" => 2 * ta.ema(src, length) - ta.ema(ta.ema(src, length), length)
+        "TEMA" => 3 * ta.ema(src, length) - 3 * ta.ema(ta.ema(src, length), length) + ta.ema(ta.ema(ta.ema(src, length), length), length)
+        "TMA" => ta.sma(ta.sma(src, length), length)
+        => na
+
+ma_line = f_ma(ma_source, ma_length, ma_type)
+
+// Условия для свечей
+bullish_prev = close[1] > open[1]  // Предыдущая свеча бычья
+bearish_prev = close[1] < open[1]  // Предыдущая свеча медвежья
+
+// Условия входа
+long_condition = close > ma_line and bullish_prev
+short_condition = close < ma_line and bearish_prev
+
+// Экстремумы для стопов (фиксированные на момент входа, на основе предыдущих баров)
+long_stop_level = ta.lowest(low[1], lookback)
+short_stop_level = ta.highest(high[1], lookback)
+
+// Вход в лонг: закрываем шорт, если открыт, и входим в лонг с фиксированным стопом
+if long_condition
+    if strategy.position_size < 0
+        strategy.close("Short")
+    strategy.entry("Long", strategy.long)
+    strategy.exit("Stop Long", from_entry="Long", stop=long_stop_level)  // Фиксированный стоп, не меняется
+
+// Вход в шорт: закрываем лонг, если открыт, и входим в шорт с фиксированным стопом
+if short_condition
+    if strategy.position_size > 0
+        strategy.close("Long")
+    strategy.entry("Short", strategy.short)
+    strategy.exit("Stop Short", from_entry="Short", stop=short_stop_level)  // Фиксированный стоп, не меняется
+
+// Отображение MA
+plot(ma_line, color=color.blue, title="MA", linewidth=2)
+
+// Визуализация стопов (горизонтальные линии для текущей позиции)
+plot(strategy.position_size > 0 ? long_stop_level : na, color=color.red, style=plot.style_linebr, title="Long Stop", linewidth=2)
+plot(strategy.position_size < 0 ? short_stop_level : na, color=color.green, style=plot.style_linebr, title="Short Stop", linewidth=2)
+
+// Логика покраски фона на основе активной позиции
+bgcolor(strategy.position_size > 0 ? color.new(color.green, 90) : strategy.position_size < 0 ? color.new(color.red, 90) : color.new(color.gray, 90))
