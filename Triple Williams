@@ -1,0 +1,93 @@
+//@version=6
+indicator(title="Multi Williams %R with MA", shorttitle="Multi WPR MA", format=format.price, precision=2, timeframe="", timeframe_gaps=true)
+
+// --- WPR 1 Inputs ---
+length1 = input.int(14, title="Length", minval=1, group="WPR 1 Settings")
+src = input.source(close, "Source", group="WPR 1 Settings")
+
+// --- WPR 1 MA Inputs ---
+GRP1 = "WPR 1 MA Settings"
+maType1 = input.string("SMA", "Type", options = ["None", "SMA", "EMA", "SMMA (RMA)", "WMA", "VWMA"], group = GRP1)
+maLength1 = input.int(14, "Length", minval=1, group = GRP1, active = maType1 != "None")
+var enableMA1 = maType1 != "None"
+
+// --- WPR 2 Inputs ---
+length2 = input.int(21, title="Length", minval=1, group="WPR 2 Settings")
+
+// --- WPR 2 MA Inputs ---
+GRP2 = "WPR 2 MA Settings"
+maType2 = input.string("SMA", "Type", options = ["None", "SMA", "EMA", "SMMA (RMA)", "WMA", "VWMA"], group = GRP2)
+maLength2 = input.int(14, "Length", minval=1, group = GRP2, active = maType2 != "None")
+var enableMA2 = maType2 != "None"
+
+// --- WPR 3 Inputs ---
+length3 = input.int(28, title="Length", minval=1, group="WPR 3 Settings")
+
+// --- WPR 3 MA Inputs ---
+GRP3 = "WPR 3 MA Settings"
+maType3 = input.string("SMA", "Type", options = ["None", "SMA", "EMA", "SMMA (RMA)", "WMA", "VWMA"], group = GRP3)
+maLength3 = input.int(14, "Length", minval=1, group = GRP3, active = maType3 != "None")
+var enableMA3 = maType3 != "None"
+
+// --- WPR Calculation Function ---
+_pr(length) =>
+    max = ta.highest(src, length)
+    min = ta.lowest(src, length)
+    100 * (src - max) / (max - min)
+
+// --- WPR Calculations ---
+percentR1 = _pr(length1)
+percentR2 = _pr(length2)
+percentR3 = _pr(length3)
+
+// --- Normalize to 0-100 ---
+norm1 = percentR1 + 100
+norm2 = percentR2 + 100
+norm3 = percentR3 + 100
+
+// --- MA Function ---
+ma(source, length, MAtype) =>
+    switch MAtype
+        "SMA"                   => ta.sma(source, length)
+        "EMA"                   => ta.ema(source, length)
+        "SMMA (RMA)"            => ta.rma(source, length)
+        "WMA"                   => ta.wma(source, length)
+        "VWMA"                  => ta.vwma(source, length)
+        => na
+
+// --- MA Calculations (applied to normalized) ---
+smoothingMA1 = enableMA1 ? ma(norm1, maLength1, maType1) : na
+smoothingMA2 = enableMA2 ? ma(norm2 + 100, maLength2, maType2) : na  // Shift for second
+smoothingMA3 = enableMA3 ? ma(norm3 + 200, maLength3, maType3) : na  // Shift for third
+
+// --- Plots for WPR 1 (0-100) ---
+plot(norm1, title="WPR 1", color=#2962FF, linewidth=2)
+plot(smoothingMA1, title="WPR 1 MA", color=color.yellow, linewidth=1, display=enableMA1 ? display.all : display.none)
+
+// --- Plots for WPR 2 (100-200) ---
+shift2 = 100
+plot(norm2 + shift2, title="WPR 2", color=#4CAF50, linewidth=2)
+plot(smoothingMA2, title="WPR 2 MA", color=color.yellow, linewidth=1, display=enableMA2 ? display.all : display.none)
+
+// --- Plots for WPR 3 (200-300) ---
+shift3 = 200
+plot(norm3 + shift3, title="WPR 3", color=#F44336, linewidth=2)
+plot(smoothingMA3, title="WPR 3 MA", color=color.yellow, linewidth=1, display=enableMA3 ? display.all : display.none)
+
+// --- Horizontal Lines and Fills for WPR 1 (0-100) ---
+ob1 = hline(80, title="WPR1 Upper Band", color=#787B86)
+mid1 = hline(50, title="WPR1 Middle", linestyle=hline.style_dotted, color=#787B86)
+os1 = hline(20, title="WPR1 Lower Band", color=#787B86)
+fill(ob1, os1, title="WPR1 Background", color=color.new(#2962FF, 90))
+
+// --- Horizontal Lines and Fills for WPR 2 (100-200) ---
+ob2 = hline(80 + shift2, title="WPR2 Upper Band", color=#787B86)
+mid2 = hline(50 + shift2, title="WPR2 Middle", linestyle=hline.style_dotted, color=#787B86)
+os2 = hline(20 + shift2, title="WPR2 Lower Band", color=#787B86)
+fill(ob2, os2, title="WPR2 Background", color=color.new(#4CAF50, 90))
+
+// --- Horizontal Lines and Fills for WPR 3 (200-300) ---
+ob3 = hline(80 + shift3, title="WPR3 Upper Band", color=#787B86)
+mid3 = hline(50 + shift3, title="WPR3 Middle", linestyle=hline.style_dotted, color=#787B86)
+os3 = hline(20 + shift3, title="WPR3 Lower Band", color=#787B86)
+fill(ob3, os3, title="WPR3 Background", color=color.new(#F44336, 90))
