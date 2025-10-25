@@ -1,0 +1,136 @@
+//@version=5
+strategy("MA with Fast Cross Filter - MA Trailing Stop + Cross Exit", overlay=true, default_qty_type=strategy.percent_of_equity, default_qty_value=1, initial_capital=10000)
+
+// === Slow MA Параметры (бывшая основная MA) ===
+slowGroup = "=== Slow MA (Main Signal) ==="
+slow_length = input.int(20, title="Slow Length", minval=1, group=slowGroup)
+slow_type = input.string("EMA", title="Slow Type", options=["SMA", "EMA", "WMA", "VWMA", "HMA", "DEMA", "TEMA", "TMA"], group=slowGroup)
+slow_source = input.source(close, title="Slow Source", group=slowGroup)
+
+// === Fast MA Параметры (Cross Filter) ===
+fastGroup = "=== Fast MA (Cross Filter) ==="
+fast_length = input.int(9, title="Fast Length", minval=1, group=fastGroup)
+fast_type = input.string("EMA", title="Fast Type", options=["SMA", "EMA", "WMA", "VWMA", "HMA", "DEMA", "TEMA", "TMA"], group=fastGroup)
+fast_source = input.source(close, title="Fast Source", group=fastGroup)
+
+// === Filter MA Параметры ===
+filterGroup = "=== Filter MA ==="
+filter_length = input.int(50, title="Filter Length", minval=1, group=filterGroup)
+filter_type = input.string("SMA", title="Filter Type", options=["SMA", "EMA", "WMA", "VWMA", "HMA", "DEMA", "TEMA", "TMA"], group=filterGroup)
+filter_source = input.source(close, title="Filter Source", group=filterGroup)
+
+// === Trailing Stop Параметры ===
+trailGroup = "=== Trailing Stop ==="
+use_trailing = input.bool(true, title="Use MA Trailing Stop", group=trailGroup)
+trail_offset = input.float(0.5, title="Trail Offset %", minval=0, step=0.01, group=trailGroup) / 100
+
+// === Cross Exit Параметры ===
+exitGroup = "=== Cross Exit ==="
+use_cross_exit = input.bool(false, title="Use Cross Exit (Optional)", group=exitGroup)
+
+// === Общие Параметры ===
+commonGroup = "=== Common ==="
+lookback = input.int(1, title="Lookback for Initial Stop", minval=1, group=commonGroup)
+
+// Функция для расчета MA
+f_ma(src, length, type) =>
+    switch type
+        "SMA" => ta.sma(src, length)
+        "EMA" => ta.ema(src, length)
+        "WMA" => ta.wma(src, length)
+        "VWMA" => ta.vwma(src, length)
+        "HMA" => ta.hma(src, length)
+        "DEMA" => 2 * ta.ema(src, length) - ta.ema(ta.ema(src, length), length)
+        "TEMA" => 3 * ta.ema(src, length) - 3 * ta.ema(ta.ema(src, length), length) + ta.ema(ta.ema(ta.ema(src, length), length), length)
+        "TMA" => ta.sma(ta.sma(src, length), length)
+        => na
+
+// Расчет MA
+slow_ma = f_ma(slow_source, slow_length, slow_type)
+fast_ma = f_ma(fast_source, fast_length, fast_type)
+filter_ma = f_ma(filter_source, filter_length, filter_type)
+
+// Условия для свечей
+bullish_prev = close[1] > open[1]  // Предыдущая свеча бычья
+bearish_prev = close[1] < open[1]  // Предыдущая свеча медвежья
+
+// Основные условия сигнала (на slow_ma)
+long_signal_base = close > slow_ma and bullish_prev
+short_signal_base = close < slow_ma and bearish_prev
+
+// Cross Filter: fast_ma > slow_ma для long, fast_ma < slow_ma для short
+cross_long_filter = fast_ma > slow_ma
+cross_short_filter = fast_ma < slow_ma
+
+// Фильтр по Filter MA
+filter_long_allowed = close > filter_ma
+filter_short_allowed = close < filter_ma
+
+// Финальные условия входа (base + cross filter + filter MA)
+long_condition = long_signal_base and cross_long_filter and filter_long_allowed
+short_condition = short_signal_base and cross_short_filter and filter_short_allowed
+
+// Cross Exit условия
+cross_exit_long = ta.crossunder(fast_ma, slow_ma)  // Fast под Slow — выход из лонг
+cross_exit_short = ta.crossover(fast_ma, slow_ma)  // Fast над Slow — выход из шорт
+
+// Экстремумы для начального стопа
+long_stop_level = ta.lowest(low[1], lookback)
+short_stop_level = ta.highest(high[1], lookback)
+
+// Переменные для trailing стопа
+var float trailing_long_stop = na
+var float trailing_short_stop = na
+
+// Вход в лонг: закрываем шорт, если открыт, и входим с начальным стопом
+if long_condition
+    if strategy.position_size < 0
+        strategy.close("Short")
+    strategy.entry("Long", strategy.long)
+    trailing_long_stop := long_stop_level  // Начальный стоп
+    strategy.exit("Stop Long", from_entry="Long", stop=trailing_long_stop)
+
+// Вход в шорт: закрываем лонг, если открыт, и входим с начальным стопом
+if short_condition
+    if strategy.position_size > 0
+        strategy.close("Long")
+    strategy.entry("Short", strategy.short)
+    trailing_short_stop := short_stop_level  // Начальный стоп
+    strategy.exit("Stop Short", from_entry="Short", stop=trailing_short_stop)
+
+// Обновление trailing стопа по slow_ma (если включено)
+if strategy.position_size > 0 and use_trailing
+    new_trail_stop = slow_ma * (1 - trail_offset)  // Ниже slow_ma на offset
+    trailing_long_stop := math.max(nz(trailing_long_stop), new_trail_stop)  // Ratchet up
+    strategy.exit("Stop Long", from_entry="Long", stop=trailing_long_stop)
+
+if strategy.position_size < 0 and use_trailing
+    new_trail_stop = slow_ma * (1 + trail_offset)  // Выше slow_ma на offset
+    trailing_short_stop := math.min(nz(trailing_short_stop), new_trail_stop)  // Ratchet down
+    strategy.exit("Stop Short", from_entry="Short", stop=trailing_short_stop)
+
+// Опциональный выход по кроссу (если включено)
+if use_cross_exit
+    if strategy.position_size > 0 and cross_exit_long
+        strategy.close("Long", comment="Cross Exit Long")
+    if strategy.position_size < 0 and cross_exit_short
+        strategy.close("Short", comment="Cross Exit Short")
+
+// Отображение MA
+plot(slow_ma, color=color.blue, title="Slow MA", linewidth=2)
+plot(fast_ma, color=color.orange, title="Fast MA (Cross Filter)", linewidth=1)
+plot(filter_ma, color=color.gray, title="Filter MA", linewidth=3)
+
+// Визуализация trailing стопов
+plot(strategy.position_size > 0 ? trailing_long_stop : na, color=color.red, style=plot.style_linebr, title="Trailing Long Stop", linewidth=2)
+plot(strategy.position_size < 0 ? trailing_short_stop : na, color=color.green, style=plot.style_linebr, title="Trailing Short Stop", linewidth=2)
+
+// Логика покраски фона на основе активной позиции
+bgcolor(strategy.position_size > 0 ? color.new(color.green, 90) : strategy.position_size < 0 ? color.new(color.red, 90) : color.new(color.gray, 90))
+
+// Bar Coloring на основе Filter MA
+bar_above_filter = low > filter_ma
+bar_below_filter = high < filter_ma
+bar_touching_filter = not bar_above_filter and not bar_below_filter  // low <= filter_ma <= high
+
+barcolor(bar_above_filter ? color.new(color.green, 0) : bar_below_filter ? color.new(color.red, 0) : color.new(color.gray, 0))
