@@ -1,0 +1,184 @@
+//@version=5
+strategy("Donchian + Optional MACD Filters + Reentry", overlay=true, max_lines_count=500, max_labels_count=500)
+
+// === Donchian Inputs ===
+dcHigh  = input.int(20, "Donchian High (Main)")
+dcLow   = input.int(10, "Donchian Low (Main)")
+dcColor = input.color(color.blue, "DC Color (Main)")
+dcMidColor = input.color(color.blue, "DC Mid Color (Main)")
+useTightStops = input.bool(true, "Use Tighter Stops?")
+dcTightHigh = input.int(10, "Tight High")
+dcTightLow  = input.int(5, "Tight Low")
+dcTightColor = input.color(color.orange, "DC Tight Color")
+
+// Additional Donchian Channels
+dcHigh2 = input.int(30, "Donchian High (Filter 1)")
+dcLow2  = input.int(15, "Donchian Low (Filter 1)")
+dcColor2 = input.color(color.purple, "DC Color (Filter 1)")
+
+dcHigh3 = input.int(40, "Donchian High (Filter 2)")
+dcLow3  = input.int(20, "Donchian Low (Filter 2)")
+dcColor3 = input.color(color.teal, "DC Color (Filter 2)")
+
+dcHigh4 = input.int(50, "Donchian High (Filter 3)")
+dcLow4  = input.int(25, "Donchian Low (Filter 3)")
+dcColor4 = input.color(color.yellow, "DC Color (Filter 3)")
+
+dcHigh5 = input.int(60, "Donchian High (Filter 4)")
+dcLow5  = input.int(30, "Donchian Low (Filter 4)")
+dcColor5 = input.color(color.orange, "DC Color (Filter 4)")
+
+dcHigh6 = input.int(70, "Donchian High (Filter 5)")
+dcLow6  = input.int(35, "Donchian Low (Filter 5)")
+dcColor6 = input.color(color.green, "DC Color (Filter 5)")
+
+// === Donchian Calculations ===
+dcUpper = ta.highest(high, dcHigh)
+dcLower = ta.lowest(low, dcLow)
+dcMid   = math.avg(dcUpper, dcLower)
+dcTightUpper = ta.highest(high, dcTightHigh)
+dcTightLower = ta.lowest(low, dcTightLow)
+
+dcUpper2 = ta.highest(high, dcHigh2)
+dcLower2 = ta.lowest(low, dcLow2)
+dcUpper3 = ta.highest(high, dcHigh3)
+dcLower3 = ta.lowest(low, dcLow3)
+dcUpper4 = ta.highest(high, dcHigh4)
+dcLower4 = ta.lowest(low, dcLow4)
+dcUpper5 = ta.highest(high, dcHigh5)
+dcLower5 = ta.lowest(low, dcLow5)
+dcUpper6 = ta.highest(high, dcHigh6)
+dcLower6 = ta.lowest(low, dcLow6)
+
+// === Plots ===
+plot(dcUpper, "DC Upper", color=dcColor, linewidth=2)
+plot(dcLower, "DC Lower", color=dcColor, linewidth=2)
+plot(dcMid, "DC Mid", color=dcMidColor, linewidth=1)
+plot(useTightStops ? dcTightUpper : na, "DC Tight Upper", color=dcTightColor, linewidth=2)
+plot(useTightStops ? dcTightLower : na, "DC Tight Lower", color=dcTightColor, linewidth=2)
+plot(dcUpper2, "DC Upper 2", color=dcColor2, linewidth=1)
+plot(dcLower2, "DC Lower 2", color=dcColor2, linewidth=1)
+plot(dcUpper3, "DC Upper 3", color=dcColor3, linewidth=1)
+plot(dcLower3, "DC Lower 3", color=dcColor3, linewidth=1)
+plot(dcUpper4, "DC Upper 4", color=dcColor4, linewidth=1)
+plot(dcLower4, "DC Lower 4", color=dcColor4, linewidth=1)
+plot(dcUpper5, "DC Upper 5", color=dcColor5, linewidth=1)
+plot(dcLower5, "DC Lower 5", color=dcColor5, linewidth=1)
+plot(dcUpper6, "DC Upper 6", color=dcColor6, linewidth=1)
+plot(dcLower6, "DC Lower 6", color=dcColor6, linewidth=1)
+
+// === Direction Logic ===
+var bool dc1Up = false
+var bool dc2Up = false
+var bool dc3Up = false
+var bool dc4Up = false
+var bool dc5Up = false
+var bool dc6Up = false
+
+if ta.crossover(high, dcUpper[1])
+    dc1Up := true
+if ta.crossunder(low, dcLower[1])
+    dc1Up := false
+
+if ta.crossover(high, dcUpper2[1])
+    dc2Up := true
+if ta.crossunder(low, dcLower2[1])
+    dc2Up := false
+
+if ta.crossover(high, dcUpper3[1])
+    dc3Up := true
+if ta.crossunder(low, dcLower3[1])
+    dc3Up := false
+
+if ta.crossover(high, dcUpper4[1])
+    dc4Up := true
+if ta.crossunder(low, dcLower4[1])
+    dc4Up := false
+
+if ta.crossover(high, dcUpper5[1])
+    dc5Up := true
+if ta.crossunder(low, dcLower5[1])
+    dc5Up := false
+
+if ta.crossover(high, dcUpper6[1])
+    dc6Up := true
+if ta.crossunder(low, dcLower6[1])
+    dc6Up := false
+
+// === Background Color ===
+bgColor = dc1Up and dc2Up and dc3Up and dc4Up and dc5Up and dc6Up ? color.new(color.green, 90) : 
+          not dc1Up and not dc2Up and not dc3Up and not dc4Up and not dc5Up and not dc6Up ? color.new(color.red, 90) : 
+          color.new(color.gray, 90)
+bgcolor(bgColor)
+
+// === Entry Logic ===
+var bool isShortActivated = false
+var bool isLongActivated = false
+if not dc1Up and not dc2Up and not dc3Up and not dc4Up and not dc5Up and not dc6Up
+    isShortActivated := true
+    isLongActivated := false
+if dc1Up and dc2Up and dc3Up and dc4Up and dc5Up and dc6Up
+    isLongActivated := true
+    isShortActivated := false
+
+// === Dynamic Stops ===
+inShortPosition = strategy.position_size < 0
+inLongPosition  = strategy.position_size > 0
+inShortProfit   = inShortPosition and strategy.position_avg_price >= dcTightUpper
+inLongProfit    = inLongPosition and strategy.position_avg_price <= dcTightLower
+
+shortStopLevel = inShortPosition and not inShortProfit ? dcTightUpper : inShortPosition and inShortProfit ? dcUpper : dcTightUpper
+longStopLevel  = inLongPosition and not inLongProfit ? dcTightLower : inLongPosition and inLongProfit ? dcLower : dcTightLower
+shortStop = useTightStops ? shortStopLevel : dcUpper
+longStop  = useTightStops ? longStopLevel : dcLower
+
+// === MACD Filters Option ===
+useMACD = input.bool(false, "Use MACD Filters?")
+allowReentryMACD = input.bool(false, "Reentry after MACD exit?")
+
+src   = close
+fast1 = input.int(12, "MACD Fast #1")
+slow1 = input.int(26, "MACD Slow #1")
+fast2 = input.int(20, "MACD Fast #2")
+slow2 = input.int(50, "MACD Slow #2")
+
+alpha(len) => 2.0 / (len + 1.0)
+macd_level(level, price, fast_len, slow_len) =>
+    num = level + (1 - alpha(slow_len)) * ta.ema(price, slow_len)[1] - (1 - alpha(fast_len)) * ta.ema(price, fast_len)[1]
+    den = alpha(fast_len) - alpha(slow_len)
+    den != 0 ? num / den : na
+
+zl1 = macd_level(0, src, fast1, slow1)
+zl2 = macd_level(0, src, fast2, slow2)
+plot(useMACD ? zl1 : na, "MACD ZeroLine 1", color=color.red, linewidth=2)
+plot(useMACD ? zl2 : na, "MACD ZeroLine 2", color=color.blue, linewidth=2)
+
+allMacdAbove = not useMACD or (close > zl1 and close > zl2)
+allMacdBelow = not useMACD or (close < zl1 and close < zl2)
+
+// === Final Strategy Entries/Exits ===
+var bool exitedByMACD = false
+
+shortEntry = (isShortActivated or (allowReentryMACD and exitedByMACD)) and allMacdBelow
+longEntry  = (isLongActivated  or (allowReentryMACD and exitedByMACD)) and allMacdAbove
+shortExit  = ta.crossover(high, shortStop[1]) or (useMACD and ta.crossover(close, zl1))
+longExit   = ta.crossunder(low, longStop[1]) or (useMACD and ta.crossunder(close, zl1))
+
+if shortEntry
+    strategy.entry("Short", strategy.short)
+    exitedByMACD := false
+if longEntry
+    strategy.entry("Long", strategy.long)
+    exitedByMACD := false
+
+if shortExit
+    strategy.close("Short")
+    isShortActivated := false
+    if useMACD and ta.crossover(close, zl1)
+        exitedByMACD := true
+
+if longExit
+    strategy.close("Long")
+    isLongActivated := false
+    if useMACD and ta.crossunder(close, zl1)
+        exitedByMACD := true
