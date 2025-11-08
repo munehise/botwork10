@@ -1,0 +1,104 @@
+//@version=5
+strategy("50-200 SMA Cross Strategy with Passive 100 & Filter MA", overlay=true, initial_capital=10000, default_qty_type=strategy.percent_of_equity, default_qty_value=100)
+
+// Fast MA Inputs
+type_fast = input.string("SMA", "Fast MA Type", options=["SMA", "EMA", "WMA", "RMA", "DEMA", "TEMA", "TMA", "VWMA", "HMA"], group="Fast MA (50) Settings")
+src_fast = input.source(close, "Fast MA Source", group="Fast MA (50) Settings")
+fast_len = input.int(50, "Fast MA Length", minval=1, group="Fast MA (50) Settings")
+
+// Passive MA Inputs
+type_passive = input.string("SMA", "Passive MA Type", options=["SMA", "EMA", "WMA", "RMA", "DEMA", "TEMA", "TMA", "VWMA", "HMA"], group="Passive MA (100) Settings")
+src_passive = input.source(close, "Passive MA Source", group="Passive MA (100) Settings")
+mid_len = input.int(100, "Passive MA Length", minval=1, group="Passive MA (100) Settings")
+
+// Slow MA Inputs
+type_slow = input.string("SMA", "Slow MA Type", options=["SMA", "EMA", "WMA", "RMA", "DEMA", "TEMA", "TMA", "VWMA", "HMA"], group="Slow MA (200) Settings")
+src_slow = input.source(close, "Slow MA Source", group="Slow MA (200) Settings")
+slow_len = input.int(200, "Slow MA Length", minval=1, group="Slow MA (200) Settings")
+
+// Filter MA Inputs
+type_filter = input.string("SMA", "Filter MA Type", options=["SMA", "EMA", "WMA", "RMA", "DEMA", "TEMA", "TMA", "VWMA", "HMA"], group="Filter MA Settings")
+src_filter = input.source(close, "Filter MA Source", group="Filter MA Settings")
+filter_len = input.int(150, "Filter MA Length", minval=1, group="Filter MA Settings")
+
+// Strategy Settings
+bypass_filter_exits = input.bool(false, "Bypass Filter MA Exits (Exits Only on 50-200 Cross)", group="Strategy Settings")
+
+// Custom DEMA function
+dema(src, len) =>
+    ema1 = ta.ema(src, len)
+    2 * ema1 - ta.ema(ema1, len)
+
+// Custom TEMA function
+tema(src, len) =>
+    ema1 = ta.ema(src, len)
+    ema2 = ta.ema(ema1, len)
+    ema3 = ta.ema(ema2, len)
+    3 * (ema1 - ema2) + ema3
+
+// Function to calculate MA based on type
+get_ma(typ, len, s) =>
+    switch typ
+        "SMA" => ta.sma(s, len)
+        "EMA" => ta.ema(s, len)
+        "WMA" => ta.wma(s, len)
+        "RMA" => ta.rma(s, len)
+        "DEMA" => dema(s, len)
+        "TEMA" => tema(s, len)
+        "VWMA" => ta.vwma(s, len)
+        "HMA" => ta.hma(s, len)
+        "TMA" => 
+            tma_len = math.round(len / 2.0)
+            ta.sma(ta.sma(s, tma_len), tma_len)
+        => na
+
+// Calculate MAs
+fast_ma = get_ma(type_fast, fast_len, src_fast)
+passive_ma = get_ma(type_passive, mid_len, src_passive)
+slow_ma = get_ma(type_slow, slow_len, src_slow)
+filter_ma = get_ma(type_filter, filter_len, src_filter)
+
+// Plot MAs
+plot(fast_ma, "Fast MA", color=color.blue, linewidth=2)
+plot(passive_ma, "Passive MA (100)", color=color.orange, linewidth=1)  // Passive: just for reference, not used in signals
+plot(slow_ma, "Slow MA", color=color.red, linewidth=2)
+plot(filter_ma, "Filter MA", color=color.purple, linewidth=2)  // Filter: directional bias
+
+// Signal definitions
+long_signal = ta.crossover(fast_ma, slow_ma)
+short_signal = ta.crossunder(fast_ma, slow_ma)
+long_filter = close > filter_ma
+short_filter = close < filter_ma
+filter_long_cross = ta.crossover(close, filter_ma)
+filter_short_cross = ta.crossunder(close, filter_ma)
+bullish_regime = fast_ma > slow_ma
+bearish_regime = fast_ma < slow_ma
+
+// Handle cross signals: Exit opposite on cross
+if long_signal
+    if strategy.position_size < 0
+        strategy.close("Short", comment="Cross Exit Short")
+if short_signal
+    if strategy.position_size > 0
+        strategy.close("Long", comment="Cross Exit Long")
+
+// Entries on cross + filter alignment
+if long_signal and long_filter
+    strategy.entry("Long", strategy.long, comment="Cross + Filter Long")
+
+if short_signal and short_filter
+    strategy.entry("Short", strategy.short, comment="Cross + Filter Short")
+
+// Additional entries on filter cross when regime already set
+if filter_long_cross and bullish_regime
+    strategy.entry("Long", strategy.long, comment="Filter Cross Long")
+
+if filter_short_cross and bearish_regime
+    strategy.entry("Short", strategy.short, comment="Filter Cross Short")
+
+// Additional exits on filter breach (only if not bypassed)
+if strategy.position_size > 0 and not long_filter and not bypass_filter_exits
+    strategy.close("Long", comment="Filter Breach Exit Long")
+
+if strategy.position_size < 0 and not short_filter and not bypass_filter_exits
+    strategy.close("Short", comment="Filter Breach Exit Short")
