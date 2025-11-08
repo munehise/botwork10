@@ -1,0 +1,47 @@
+//@version=5
+strategy("50-200 SMA Cross Strategy with Passive 100 MA", overlay=true, initial_capital=10000, default_qty_type=strategy.percent_of_equity, default_qty_value=100)
+
+// Fast MA Inputs
+type_fast = input.string("SMA", "Fast MA Type", options=["SMA", "EMA", "WMA", "RMA"], group="Fast MA (50) Settings")
+src_fast = input.source(close, "Fast MA Source", group="Fast MA (50) Settings")
+fast_len = input.int(50, "Fast MA Length", minval=1, group="Fast MA (50) Settings")
+
+// Passive MA Inputs
+type_passive = input.string("SMA", "Passive MA Type", options=["SMA", "EMA", "WMA", "RMA"], group="Passive MA (100) Settings")
+src_passive = input.source(close, "Passive MA Source", group="Passive MA (100) Settings")
+mid_len = input.int(100, "Passive MA Length", minval=1, group="Passive MA (100) Settings")
+
+// Slow MA Inputs
+type_slow = input.string("SMA", "Slow MA Type", options=["SMA", "EMA", "WMA", "RMA"], group="Slow MA (200) Settings")
+src_slow = input.source(close, "Slow MA Source", group="Slow MA (200) Settings")
+slow_len = input.int(200, "Slow MA Length", minval=1, group="Slow MA (200) Settings")
+
+// Function to calculate MA based on type
+get_ma(typ, len, s) =>
+    switch typ
+        "SMA" => ta.sma(s, len)
+        "EMA" => ta.ema(s, len)
+        "WMA" => ta.wma(s, len)
+        "RMA" => ta.rma(s, len)
+        => na
+
+// Calculate MAs
+fast_ma = get_ma(type_fast, fast_len, src_fast)
+passive_ma = get_ma(type_passive, mid_len, src_passive)
+slow_ma = get_ma(type_slow, slow_len, src_slow)
+
+// Plot MAs
+plot(fast_ma, "Fast MA", color=color.blue, linewidth=2)
+plot(passive_ma, "Passive MA (100)", color=color.orange, linewidth=1)  // Passive: just for reference, not used in signals
+plot(slow_ma, "Slow MA", color=color.red, linewidth=2)
+
+// Strategy conditions: Simple crossover/crossunder for long/short
+long_condition = ta.crossover(fast_ma, slow_ma)
+short_condition = ta.crossunder(fast_ma, slow_ma)
+
+// Entries (reverses position on opposite signal)
+if long_condition
+    strategy.entry("Long", strategy.long)
+
+if short_condition
+    strategy.entry("Short", strategy.short)
