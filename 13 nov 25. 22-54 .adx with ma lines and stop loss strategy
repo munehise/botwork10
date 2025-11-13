@@ -1,0 +1,143 @@
+//@version=5
+strategy("ADX + Filters Strategy with MA Exits", shorttitle="ADX MA Strategy", overlay=true)
+
+// Helper Functions
+f_tma(src, len) =>
+    half_len = math.round(len / 2)
+    ta.sma(ta.sma(src, half_len), half_len)
+
+f_dema(src, len) =>
+    ema1 = ta.ema(src, len)
+    ema2 = ta.ema(ema1, len)
+    2 * ema1 - ema2
+
+f_tema(src, len) =>
+    ema1 = ta.ema(src, len)
+    ema2 = ta.ema(ema1, len)
+    ema3 = ta.ema(ema2, len)
+    3 * ema1 - 3 * ema2 + ema3
+
+f_ma(src, len, typ) =>
+    switch typ
+        "SMA" => ta.sma(src, len)
+        "EMA" => ta.ema(src, len)
+        "WMA" => ta.wma(src, len)
+        "RMA" => ta.rma(src, len)
+        "VWMA" => ta.vwma(src, len)
+        "TEMA" => f_tema(src, len)
+        "HMA" => ta.hma(src, len)
+        "TMA" => f_tma(src, len)
+        "DEMA" => f_dema(src, len)
+        => na
+
+// Main MA Crossover Filter Inputs
+useMACrossoverFilter = input.bool(true, title="Use MA Crossover Filter")
+fastType = input.string("EMA", title="Fast MA Type", options=["SMA", "EMA", "WMA", "RMA", "TMA", "TEMA", "DEMA", "HMA", "VWMA"])
+fastLength = input.int(9, title="Fast MA Length", minval=1)
+fastSource = input.source(close, title="Fast MA Source")
+slowType = input.string("EMA", title="Slow MA Type", options=["SMA", "EMA", "WMA", "RMA", "TMA", "TEMA", "DEMA", "HMA", "VWMA"])
+slowLength = input.int(21, title="Slow MA Length", minval=1)
+slowSource = input.source(close, title="Slow MA Source")
+
+// Additional MA Filter Inputs
+useMA1Filter = input.bool(false, title="Use MA1 Filter")
+ma1Type = input.string("SMA", title="MA1 Type", options=["SMA", "EMA", "WMA", "RMA", "TMA", "TEMA", "DEMA", "HMA", "VWMA"])
+ma1Length = input.int(50, title="MA1 Length", minval=1)
+ma1Source = input.source(close, title="MA1 Source")
+useMA2Filter = input.bool(false, title="Use MA2 Filter")
+ma2Type = input.string("EMA", title="MA2 Type", options=["SMA", "EMA", "WMA", "RMA", "TMA", "TEMA", "DEMA", "HMA", "VWMA"])
+ma2Length = input.int(200, title="MA2 Length", minval=1)
+ma2Source = input.source(close, title="MA2 Source")
+
+// Main ADX Inputs
+adxLength = input.int(14, title="ADX Length", minval=1)
+adxThreshold = input.int(25, title="ADX Threshold", minval=1)
+
+// Stop Loss Inputs
+useStopLoss = input.bool(false, title="Use Stop Loss")
+useTrailingSL = input.bool(false, title="Use Trailing SL to ADX Signals")
+stopLossOffset = input.float(0.0, title="Stop Loss Offset (Price Units)", minval=0.0)
+
+// Calculate Main MAs
+fastMA = f_ma(fastSource, fastLength, fastType)
+slowMA = f_ma(slowSource, slowLength, slowType)
+
+// Calculate Additional MAs
+ma1 = f_ma(ma1Source, ma1Length, ma1Type)
+ma2 = f_ma(ma2Source, ma2Length, ma2Type)
+
+// Calculate ADX and DMI
+[diplus, diminus, adx] = ta.dmi(adxLength, adxLength)
+
+// Plot Main MAs if filter is used
+plot(useMACrossoverFilter ? fastMA : na, color=color.blue, title="Fast MA")
+plot(useMACrossoverFilter ? slowMA : na, color=color.orange, title="Slow MA")
+
+// Plot Additional MAs if respective filter is used
+plot(useMA1Filter ? ma1 : na, color=color.purple, title="MA1", linewidth=2)
+plot(useMA2Filter ? ma2 : na, color=color.aqua, title="MA2", linewidth=2)
+
+// Signal conditions
+trendUp = diplus > diminus
+trendDown = diminus > diplus
+strongTrend = adx > adxThreshold
+maCrossoverBullish = useMACrossoverFilter ? fastMA > slowMA : true
+maCrossoverBearish = useMACrossoverFilter ? fastMA < slowMA : true
+maBullish = (not useMA1Filter or close > ma1) and (not useMA2Filter or close > ma2)
+maBearish = (not useMA1Filter or close < ma1) and (not useMA2Filter or close < ma2)
+
+// Buy/Sell signals with filters
+buySignal = ta.crossover(diplus, diminus) and strongTrend and maCrossoverBullish and maBullish
+sellSignal = ta.crossunder(diplus, diminus) and strongTrend and maCrossoverBearish and maBearish
+
+// New entry conditions (only when flat or reversing)
+longEntry = buySignal and strategy.position_size[1] <= 0
+shortEntry = sellSignal and strategy.position_size[1] >= 0
+
+// Strategy entries (always on new entry)
+if longEntry
+    strategy.entry("Long", strategy.long)
+    if useStopLoss
+        sl_price = low - stopLossOffset
+        strategy.exit("Long SL", "Long", stop=sl_price)
+        // Visual SL line only if not trailing
+        if not useTrailingSL
+            line.new(bar_index, sl_price, bar_index + 20, sl_price, color=color.red, width=2, extend=extend.none)
+
+if shortEntry
+    strategy.entry("Short", strategy.short)
+    if useStopLoss
+        sl_price = high + stopLossOffset
+        strategy.exit("Short SL", "Short", stop=sl_price)
+        // Visual SL line only if not trailing
+        if not useTrailingSL
+            line.new(bar_index, sl_price, bar_index + 20, sl_price, color=color.red, width=2, extend=extend.none)
+
+// Trailing SL updates (if enabled, update on every signal in direction)
+if useTrailingSL and useStopLoss
+    if strategy.position_size > 0 and buySignal
+        sl_price = low - stopLossOffset
+        strategy.exit("Long SL", "Long", stop=sl_price)
+        // Visual SL line on each trailing update
+        line.new(bar_index, sl_price, bar_index + 20, sl_price, color=color.red, width=2, extend=extend.none)
+    
+    if strategy.position_size < 0 and sellSignal
+        sl_price = high + stopLossOffset
+        strategy.exit("Short SL", "Short", stop=sl_price)
+        // Visual SL line on each trailing update
+        line.new(bar_index, sl_price, bar_index + 20, sl_price, color=color.red, width=2, extend=extend.none)
+
+// Exit conditions based on Additional MAs
+longExitMA = (useMA1Filter and close < ma1) or (useMA2Filter and close < ma2)
+shortExitMA = (useMA1Filter and close > ma1) or (useMA2Filter and close > ma2)
+if longExitMA
+    strategy.close("Long", comment="MA Exit Long")
+if shortExitMA
+    strategy.close("Short", comment="MA Exit Short")
+
+// Plot signals as triangles for visualization (all signals, for reference)
+plotshape(series=buySignal, title="Buy Signal", location=location.belowbar, color=color.yellow, style=shape.triangleup, size=size.small)
+plotshape(series=sellSignal, title="Sell Signal", location=location.abovebar, color=color.red, style=shape.triangledown, size=size.small)
+
+// Background color based on position
+bgcolor(strategy.position_size > 0 ? color.new(color.green, 90) : strategy.position_size < 0 ? color.new(color.red, 90) : color.new(color.gray, 95))
